@@ -1,0 +1,34 @@
+# OpenSauce 2026 - 4/15/26
+
+## Attendees
+Nohi, W, Kay, Kilte, MoJake, Geo, Danger, Cameron, Autunite
+
+## Progress
+1) Gatchapan Machine
+    - [W] RPI Hat for Square reader
+    - [Nohi] Android app
+    - [Kay] Code for solenoid driver board
+    - [Mojake] Assembling solenoid mechanism
+    - [Kay] Order:
+      - 110x Battery CR2032
+      - 110X Phillips head M2x15mm
+      - 110x Keychain hangers
+    - Assembly of PAWs
+    - Flashing PAWs
+    - Decorative art for machine
+    - Signatures for prizes
+
+2) Zoltaur
+    - [Danger] Reshaping the Taur
+    - [Kilte] Arming the Taur
+    - Fit the mouth of the Taur
+    - [Nohi] Electronics wire routing
+    - Redoing sconces
+    - Redoing Crystal Ball lighting
+    - Test new Motor drivers
+    - Redoing button mechanism lighting
+    - Holy LED
+
+3) Arm Game
+  - Redesign 3D Print with DE9 connector.
+  - Crate Daughter board with motor driver, MCU.
