@@ -1,6 +1,5 @@
 package com.pawprint.gachapaw
 
-import android.Manifest
 import android.Manifest.permission.POST_NOTIFICATIONS
 import android.content.Context
 import android.content.Intent
@@ -13,7 +12,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize

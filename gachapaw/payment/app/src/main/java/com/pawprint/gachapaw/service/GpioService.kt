@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Color
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
@@ -14,10 +13,9 @@ class GpioService : LifecycleService() {
 
     companion object {
         private const val TAG = "GpioService"
-        private const val NOTIFICATION_ID = 1;
+        private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "gpio_service_channel"
     }
-    private val gpioManager = GpioManager()
 
     override fun onCreate() {
         Log.d(TAG, "onCreate")
