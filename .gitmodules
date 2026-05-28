@@ -1,0 +1,3 @@
+[submodule "gachapaw/payment/app/src/main/cpp/external/liquidcrystal-i2c"]
+	path = gachapaw/payment/app/src/main/cpp/external/liquidcrystal-i2c
+	url = https://github.com/oniongarlic/liquidcrystal-i2c

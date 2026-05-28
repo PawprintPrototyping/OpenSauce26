@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.Settings
@@ -20,6 +22,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,6 +35,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.pawprint.gachapaw.model.InputGpioState
 import com.pawprint.gachapaw.ui.theme.GashapawTheme
 import com.pawprint.gachapaw.viewModel.CommandViewModel
 
@@ -83,27 +87,79 @@ fun CommandScreen(modifier: Modifier) {
                     subtitle = if (commandUiState.isPrizeDispenserActive) "Active" else "Idle",
                     icon = Icons.Default.Build,
                     isActive = commandUiState.isPrizeDispenserActive,
-                    onClick = { commandViewModel.triggerEnablePrizeDispenser() },
-                    buttonText = "Release"
-                )
+                ) {
+                    FilledTonalButton(
+                        onClick = { commandViewModel.triggerEnablePrizeDispenser() },
+                        enabled = !commandUiState.isPrizeDispenserActive,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Text("Release")
+                    }
+                }
 
                 ControlRow(
                     title = "Neopixel LED",
                     subtitle = "Ambient Lighting",
                     icon = Icons.Default.Lightbulb,
                     isActive = false,
-                    onClick = { commandViewModel.triggerSetNeopixelColor() },
-                    buttonText = "Cycle Color"
-                )
+                ) {
+                    FilledTonalButton(
+                        onClick = { commandViewModel.triggerSetNeopixelColor() },
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Text("Cycle Color")
+                    }
+                }
 
                 ControlRow(
                     title = "Square Reader",
                     subtitle = if (commandUiState.isSquareReaderActive) "Ready for Payment" else "Disabled",
                     icon = Icons.Default.Payment,
                     isActive = commandUiState.isSquareReaderActive,
-                    onClick = { commandViewModel.triggerEnableSquareReader() },
-                    buttonText = "Activate"
-                )
+                ) {
+                    FilledTonalButton(
+                        onClick = { commandViewModel.triggerEnableSquareReader() },
+                        enabled = !commandUiState.isSquareReaderActive,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Text("Activate")
+                    }
+                }
+
+                ControlRow(
+                    title = "Wait for GPIO",
+                    subtitle = when (commandUiState.inputGpioState) {
+                        InputGpioState.WAITING -> "Waiting for Button Press"
+                        InputGpioState.NOT_CHECKING -> "Latch not set"
+                        InputGpioState.LATCH_HIT -> "Button pressed!"
+                    },
+                    icon = Icons.Default.Payment,
+                    isActive = commandUiState.inputGpioState == InputGpioState.WAITING,
+                ) {
+                    if (commandUiState.inputGpioState == InputGpioState.WAITING) {
+                        OutlinedButton(
+                            onClick = { commandViewModel.triggerCancelWaitForGpio() },
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("Cancel", modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+
+                    FilledTonalButton(
+                        onClick = { commandViewModel.triggerWaitForGpio() },
+                        enabled = commandUiState.inputGpioState != InputGpioState.WAITING,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Text("Set Latch")
+                    }
+                }
             }
 
             // Status Footer
@@ -123,8 +179,7 @@ fun ControlRow(
     subtitle: String,
     icon: ImageVector,
     isActive: Boolean,
-    onClick: () -> Unit,
-    buttonText: String
+    content: @Composable RowScope.() -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -153,14 +208,7 @@ fun ControlRow(
             )
         }
 
-        FilledTonalButton(
-            onClick = onClick,
-            enabled = !isActive,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            shape = MaterialTheme.shapes.medium
-        ) {
-            Text(buttonText)
-        }
+        content()
     }
 }
 

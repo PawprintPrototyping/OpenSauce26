@@ -17,10 +17,13 @@ class GpioService : LifecycleService() {
         private const val CHANNEL_ID = "gpio_service_channel"
     }
 
+    val gpioManager = GpioManager()
+
     override fun onCreate() {
         Log.d(TAG, "onCreate")
         super.onCreate()
         createNotificationChannel()
+        gpioManager.displayOnLcd("Hello, Gaschapaw!")
     }
 
     override fun onDestroy() {

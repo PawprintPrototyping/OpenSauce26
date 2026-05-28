@@ -5,13 +5,18 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <linux/gpio.h>
 #include <linux/spi/spidev.h>
+#include "external/liquidcrystal-i2c/LiquidCrystal_I2C.h"
 
 #define LOG_TAG "GPIO_NATIVE"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+
+static int g_cancel_fd = -1;
 
 int toggle_gpio_pin(int chip_fd, int line_num, int value) {
     // Use the modern v2 request structure
@@ -110,4 +115,107 @@ Java_com_pawprint_gachapaw_service_GpioManager_setNeopixelColor(JNIEnv *env, job
         LOGE("SPI Write Failed: %s", strerror(errno));
     }
     close(spi_fd);
+}
+
+extern "C"
+JNIEXPORT int JNICALL
+Java_com_pawprint_gachapaw_service_GpioManager_waitForGpio(JNIEnv *env, jobject thiz, jint pin,
+                                                           jboolean expected_state) {
+    LOGD("enter waitForGpio");
+    int chip_fd = open("/dev/gpiochip0", O_RDONLY);
+    if (chip_fd < 0) {
+        int err = errno;
+        LOGE("waitForGpio: Failed to open /dev/gpiochip0: %d (%s)", err, strerror(err));
+        return err;
+    }
+
+    g_cancel_fd = eventfd(0, EFD_CLOEXEC);
+    if (g_cancel_fd < 0) {
+        LOGE("waitForGpio: Failed to create eventfd");
+        close(chip_fd);
+        return -1;
+    }
+
+    LOGI("Waiting for pin %d to move to state %d with 50ms debounce", pin, expected_state);
+
+    struct gpio_v2_line_request req{};
+    memset(&req, 0, sizeof(req));
+    req.num_lines = 1;
+    req.offsets[0] = pin;
+    req.config.flags = GPIO_V2_LINE_FLAG_INPUT |
+                       (expected_state ? GPIO_V2_LINE_FLAG_EDGE_RISING : GPIO_V2_LINE_FLAG_EDGE_FALLING);
+    strncpy(req.consumer, "GachaPawWait", sizeof(req.consumer) - 1);
+
+    req.config.num_attrs = 1;
+    req.config.attrs[0].attr.id = GPIO_V2_LINE_ATTR_ID_DEBOUNCE;
+    req.config.attrs[0].mask = 1ULL << 0;
+    req.config.attrs[0].attr.debounce_period_us = 50 * 1000;
+
+    if (ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, &req) < 0) {
+        int err = errno;
+        LOGE("waitForGpio: V2 ioctl failed: %d (%s)", err, strerror(err));
+        close(g_cancel_fd);
+        g_cancel_fd = -1;
+        close(chip_fd);
+        return -err;
+    }
+
+    struct pollfd fds[2];
+    fds[0].fd = req.fd;
+    fds[0].events = POLLIN;
+    fds[1].fd = g_cancel_fd;
+    fds[1].events = POLLIN;
+
+    int poll_res = poll(fds, 2, -1);
+    int result = 0;
+
+    if (poll_res < 0) {
+        result = -errno;
+        LOGE("waitForGpio: poll failed: %s", strerror(errno));
+    } else if (fds[1].revents & POLLIN) {
+        result = -2; // Cancelled
+        LOGI("waitForGpio: cancelled");
+    } else if (fds[0].revents & POLLIN) {
+        struct gpio_v2_line_event event{};
+        read(req.fd, &event, sizeof(event));
+        LOGI("pin %d moved to state %d", pin, expected_state);
+        result = 0;
+    }
+
+    close(req.fd);
+    close(g_cancel_fd);
+    g_cancel_fd = -1;
+    close(chip_fd);
+
+    return result;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_pawprint_gachapaw_service_GpioManager_cancelWaitForGpio(JNIEnv *env, jobject thiz) {
+    if (g_cancel_fd >= 0) {
+        uint64_t val = 1;
+        write(g_cancel_fd, &val, sizeof(val));
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_pawprint_gachapaw_service_GpioManager_updateLcdText(JNIEnv *env, jobject thiz,
+                                                       jstring text) {
+    const char *nativeString = env->GetStringUTFChars(text, nullptr);
+    LOGD("enter updateLcdText: %s", nativeString);
+
+    // HW-61 / PCF8574 Standard Pin Mapping:
+    // P0 -> RS, P1 -> RW, P2 -> EN, P3 -> Backlight, P4-P7 -> D4-D7
+    // Constructor order: dev, addr, En, Rw, Rs, d4, d5, d6, d7, backlighPin, pol
+    LiquidCrystal_I2C lcd("/dev/i2c-1", 0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
+
+    lcd.begin(20, 4);
+    lcd.backlight();
+    lcd.clear();
+    lcd.print(nativeString);
+
+    env->ReleaseStringUTFChars(text, nativeString);
+    LOGI("LCD update complete using LiquidCrystal_I2C library with HW-61 pinout");
 }
