@@ -1,5 +1,6 @@
-package com.pawprint.gachapaw.service
+package org.pawprint.gachapaw.service
 
+import android.R
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -42,7 +43,7 @@ class GpioService : LifecycleService() {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("GPIO Service")
             .setContentText("Monitoring GPIO pins...")
-            .setSmallIcon(android.R.drawable.ic_menu_info_details)
+            .setSmallIcon(R.drawable.ic_menu_info_details)
             .build()
 
         startForeground(

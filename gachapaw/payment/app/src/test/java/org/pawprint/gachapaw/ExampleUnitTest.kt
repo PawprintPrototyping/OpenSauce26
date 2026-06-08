@@ -1,4 +1,4 @@
-package com.pawprint.gachapaw
+package org.pawprint.gachapaw
 
 import org.junit.Test
 

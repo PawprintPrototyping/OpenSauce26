@@ -38,6 +38,7 @@ int toggle_gpio_pin(int chip_fd, int line_num, int value) {
         LOGE("V2 ioctl failed! Error: %d (%s)", err, strerror(err));
         return err;
     }
+    close(req.fd);
     return 0;
 }
 // Helper to encode one byte of data into 4 bytes of data in encoded_data
@@ -61,7 +62,7 @@ void encode_neopixel_byte(uint8_t data, uint8_t* encoded_data) {
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_pawprint_gachapaw_service_GpioManager_setGpioState(JNIEnv *env, jobject thiz, jint pin,
+Java_org_pawprint_gachapaw_service_GpioManager_setGpioState(JNIEnv *env, jobject thiz, jint pin,
                                                     jboolean state) {
     LOGD("enter setGpioState");
     int chip_fd = open("/dev/gpiochip0", O_RDWR);
@@ -77,7 +78,7 @@ Java_com_pawprint_gachapaw_service_GpioManager_setGpioState(JNIEnv *env, jobject
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_pawprint_gachapaw_service_GpioManager_setNeopixelColor(JNIEnv *env, jobject thiz,
+Java_org_pawprint_gachapaw_service_GpioManager_setNeopixelColor(JNIEnv *env, jobject thiz,
                                                         jint argbColor) {
     LOGD("enter setNeopixelColor");
     uint8_t a = (argbColor >> 24) & 0xFF;
@@ -119,7 +120,7 @@ Java_com_pawprint_gachapaw_service_GpioManager_setNeopixelColor(JNIEnv *env, job
 
 extern "C"
 JNIEXPORT int JNICALL
-Java_com_pawprint_gachapaw_service_GpioManager_waitForGpio(JNIEnv *env, jobject thiz, jint pin,
+Java_org_pawprint_gachapaw_service_GpioManager_waitForGpio(JNIEnv *env, jobject thiz, jint pin,
                                                            jboolean expected_state) {
     LOGD("enter waitForGpio");
     int chip_fd = open("/dev/gpiochip0", O_RDONLY);
@@ -192,7 +193,7 @@ Java_com_pawprint_gachapaw_service_GpioManager_waitForGpio(JNIEnv *env, jobject 
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_pawprint_gachapaw_service_GpioManager_cancelWaitForGpio(JNIEnv *env, jobject thiz) {
+Java_org_pawprint_gachapaw_service_GpioManager_cancelWaitForGpio(JNIEnv *env, jobject thiz) {
     if (g_cancel_fd >= 0) {
         uint64_t val = 1;
         write(g_cancel_fd, &val, sizeof(val));
@@ -201,7 +202,7 @@ Java_com_pawprint_gachapaw_service_GpioManager_cancelWaitForGpio(JNIEnv *env, jo
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_pawprint_gachapaw_service_GpioManager_updateLcdText(JNIEnv *env, jobject thiz,
+Java_org_pawprint_gachapaw_service_GpioManager_updateLcdText(JNIEnv *env, jobject thiz,
                                                        jstring text) {
     const char *nativeString = env->GetStringUTFChars(text, nullptr);
     LOGD("enter updateLcdText: %s", nativeString);

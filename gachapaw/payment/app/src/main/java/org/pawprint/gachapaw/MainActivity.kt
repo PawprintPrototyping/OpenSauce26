@@ -1,4 +1,4 @@
-package com.pawprint.gachapaw
+package org.pawprint.gachapaw
 
 import android.Manifest.permission.POST_NOTIFICATIONS
 import android.content.Context
@@ -24,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,10 +36,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.pawprint.gachapaw.service.GpioService
-import com.pawprint.gachapaw.ui.theme.GashapawTheme
-import com.pawprint.gachapaw.view.CommandScreen
-import com.pawprint.gachapaw.view.LoggingScreen
+import org.pawprint.gachapaw.service.GpioService
+import org.pawprint.gachapaw.ui.theme.GashapawTheme
+import org.pawprint.gachapaw.view.CommandScreen
+import org.pawprint.gachapaw.view.LoggingScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -47,10 +48,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
+
+            // Permission checks
             var hasNotificationPermission by remember {
                 mutableStateOf(isPostNotificationsGranted(context))
             }
             LaunchedEffect(hasNotificationPermission) {
+                // Evaluate every time hasNotificationPermission changes
                 if (hasNotificationPermission) {
                     startGpioService()
                 }
@@ -59,12 +63,9 @@ class MainActivity : ComponentActivity() {
                 contract = ActivityResultContracts.RequestPermission())
             { isGranted ->
                 hasNotificationPermission = isGranted
-                if (isGranted) {
-                    startGpioService()
-                }
             }
-
             LaunchedEffect(Unit) {
+                // Launch once at when the activity is created
                 if (!hasNotificationPermission) {
                     requestPermissionLauncher.launch(POST_NOTIFICATIONS)
                 }
@@ -87,7 +88,7 @@ class MainActivity : ComponentActivity() {
                             DebugScreen()
                         } else {
                             FilledTonalButton(
-                                onClick = { requestPermissionLauncher.launch(POST_NOTIFICATIONS)     },
+                                onClick = { requestPermissionLauncher.launch(POST_NOTIFICATIONS) },
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                                 shape = MaterialTheme.shapes.medium
                             ) {

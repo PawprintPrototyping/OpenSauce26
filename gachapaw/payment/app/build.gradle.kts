@@ -1,10 +1,12 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
-    namespace = "com.pawprint.gachapaw"
+    namespace = "org.pawprint.gachapaw"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -12,13 +14,37 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.pawprint.gachapaw"
+        applicationId = "org.pawprint.gachapaw"
         minSdk = 35
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        //load the values from .properties file
+        val keystoreFile = project.rootProject.file("local.properties")
+        val properties = Properties()
+        properties.load(keystoreFile.inputStream())
+
+        val appKey = properties.getProperty("MPSDK_APPLICATION_ID") ?: ""
+        val sqAuthKey = properties.getProperty("MPSDK_ACCESS_TOKEN") ?: ""
+        val locKey = properties.getProperty("MPSDK_LOCATION_ID") ?: ""
+        buildConfigField(
+            type = "String",
+            name = "MPSDK_APPLICATION_ID",
+            value = appKey
+        )
+        buildConfigField(
+            type = "String",
+            name = "MPSDK_ACCESS_TOKEN",
+            value = sqAuthKey
+        )
+        buildConfigField(
+            type = "String",
+            name = "MPSDK_LOCATION_ID",
+            value = locKey
+        )
     }
 
     buildTypes {
@@ -36,6 +62,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     externalNativeBuild {
         cmake {
@@ -65,4 +92,5 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+    implementation(libs.com.squareup.sdk)
 }

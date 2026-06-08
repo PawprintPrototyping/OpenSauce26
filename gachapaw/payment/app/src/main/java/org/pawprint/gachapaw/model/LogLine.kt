@@ -1,4 +1,4 @@
-package com.pawprint.gachapaw.model
+package org.pawprint.gachapaw.model
 
 data class LogLine(
     val timestamp: String,

@@ -1,4 +1,4 @@
-package com.pawprint.gachapaw.service
+package org.pawprint.gachapaw.service
 
 import android.util.Log
 import androidx.compose.ui.graphics.Color

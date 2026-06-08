@@ -1,5 +1,7 @@
-package com.pawprint.gachapaw.view
+package org.pawprint.gachapaw.view
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -11,6 +13,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.byValue
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cancel
@@ -24,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,13 +38,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.pawprint.gachapaw.model.InputGpioState
-import com.pawprint.gachapaw.ui.theme.GashapawTheme
-import com.pawprint.gachapaw.viewModel.CommandViewModel
+import org.pawprint.gachapaw.model.InputGpioState
+import org.pawprint.gachapaw.ui.theme.GashapawTheme
+import org.pawprint.gachapaw.viewModel.CommandViewModel
 
 @Composable
 fun CommandScreen(modifier: Modifier) {
@@ -96,6 +104,14 @@ fun CommandScreen(modifier: Modifier) {
                     ) {
                         Text("Release")
                     }
+                    FilledTonalButton(
+                        onClick = { commandViewModel.triggerDisablePrizeDispenser() },
+                        enabled = !commandUiState.isPrizeDispenserActive,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Text("Engage")
+                    }
                 }
 
                 ControlRow(
@@ -113,14 +129,38 @@ fun CommandScreen(modifier: Modifier) {
                     }
                 }
 
+                val requestPaymentLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.StartActivityForResult()
+                ) {
+                    result -> commandViewModel.handlePaymentResult(result)
+                }
+
                 ControlRow(
                     title = "Square Reader",
                     subtitle = if (commandUiState.isSquareReaderActive) "Ready for Payment" else "Disabled",
                     icon = Icons.Default.Payment,
                     isActive = commandUiState.isSquareReaderActive,
                 ) {
+
+                    val textFieldState = rememberTextFieldState(initialText = "1")
+                    val currencyMask = InputTransformation.byValue { current, proposed ->
+                        // Regex: optional digits, optional dot, up to 2 digits after dot
+                        val regex = Regex("""^\d*\.?\d{0,2}$""")
+                        if (proposed.matches(regex)) proposed else current
+                    }
+
+                    OutlinedTextField(
+                        state = textFieldState,
+                        prefix = { Text("$") },
+                        label = { Text("Set Cost") },
+                        inputTransformation = currencyMask,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number
+                        )
+                    )
+
                     FilledTonalButton(
-                        onClick = { commandViewModel.triggerEnableSquareReader() },
+                        onClick = { commandViewModel.triggerEnableSquareReader(requestPaymentLauncher,textFieldState.text) },
                         enabled = !commandUiState.isSquareReaderActive,
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         shape = MaterialTheme.shapes.medium

@@ -1,7 +1,7 @@
-package com.pawprint.gachapaw.viewModel
+package org.pawprint.gachapaw.viewModel
 
 import androidx.lifecycle.ViewModel
-import com.pawprint.gachapaw.model.LogLine
+import org.pawprint.gachapaw.model.LogLine
 import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

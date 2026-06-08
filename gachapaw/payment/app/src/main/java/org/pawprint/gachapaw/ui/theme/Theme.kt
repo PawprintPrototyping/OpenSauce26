@@ -1,4 +1,4 @@
-package com.pawprint.gachapaw.ui.theme
+package org.pawprint.gachapaw.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
