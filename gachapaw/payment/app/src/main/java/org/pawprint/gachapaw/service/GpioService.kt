@@ -7,8 +7,11 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.util.Log
+import androidx.compose.ui.graphics.Color
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
+import org.pawprint.gachapaw.PawApplication
+import org.pawprint.gachapaw.MainActivity
 
 class GpioService : LifecycleService() {
 
@@ -18,18 +21,50 @@ class GpioService : LifecycleService() {
         private const val CHANNEL_ID = "gpio_service_channel"
     }
 
-    val gpioManager = GpioManager()
+    private val gpioManager = GpioManager()
+    private val gpioRepository by lazy { (applicationContext as PawApplication).gpioRepository }
+
+    fun setGpioState(pin: Int, state: Boolean) {
+        gpioManager.setGpioState(pin, state)
+    }
+
+    fun setNeopixelColor(color: Color) {
+        gpioManager.setNeopixelColor(color)
+    }
+
+    suspend fun waitForGpioState(expectedState: Boolean): Int {
+        return gpioManager.waitForGpioState(expectedState)
+    }
+
+    fun cancelWaitForGpio() {
+        gpioManager.cancelWaitForGpio()
+    }
+
+    fun displayOnLcd(text: String) {
+        gpioManager.displayOnLcd(text)
+    }
+
+    fun bringToFront() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+        }
+        startActivity(intent)
+    }
 
     override fun onCreate() {
         Log.d(TAG, "onCreate")
         super.onCreate()
         createNotificationChannel()
-        gpioManager.displayOnLcd("Hello, Gaschapaw!")
+        gpioManager.displayOnLcd("Initializing...")
+        gpioManager.setNeopixelColor(Color.Red)
+        gpioManager.setGpioState(5, false)
+        gpioRepository.onServiceStarted(this)
     }
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
         super.onDestroy()
+        gpioRepository.onServiceStopped()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

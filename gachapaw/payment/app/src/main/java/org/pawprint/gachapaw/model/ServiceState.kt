@@ -15,7 +15,7 @@ enum class TransactionState {
     MAINTENANCE
 }
 
-data class CommandUiState(
+data class ServiceState(
     val transactionState: TransactionState = TransactionState.INITIALIZING,
     // Maintenance mode states below.
     val isPrizeDispenserActive: Boolean = false,

@@ -1,10 +1,13 @@
 package org.pawprint.gachapaw
 
 import android.Manifest.permission.POST_NOTIFICATIONS
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -36,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import org.pawprint.gachapaw.service.GpioRepository
 import org.pawprint.gachapaw.service.GpioService
 import org.pawprint.gachapaw.ui.theme.GashapawTheme
 import org.pawprint.gachapaw.view.CommandScreen
@@ -48,7 +53,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
-
+            val gpioRepository = (application as PawApplication).gpioRepository
             // Permission checks
             var hasNotificationPermission by remember {
                 mutableStateOf(isPostNotificationsGranted(context))
@@ -70,7 +75,6 @@ class MainActivity : ComponentActivity() {
                     requestPermissionLauncher.launch(POST_NOTIFICATIONS)
                 }
             }
-
             GashapawTheme {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -85,7 +89,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                     ) {
                         if (hasNotificationPermission) {
-                            DebugScreen()
+                            DebugScreen(gpioRepository)
                         } else {
                             FilledTonalButton(
                                 onClick = { requestPermissionLauncher.launch(POST_NOTIFICATIONS) },
@@ -135,7 +139,7 @@ fun GashapawScreen() {
 
 
 @Composable
-fun DebugScreen() {
+fun DebugScreen(gpioRepository: GpioRepository) {
     Row(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -144,7 +148,7 @@ fun DebugScreen() {
             LoggingScreen(modifier = Modifier.fillMaxSize())
         }
         Box(modifier = Modifier.weight(0.6f)) {
-            CommandScreen(modifier = Modifier.fillMaxSize())
+            CommandScreen(modifier = Modifier.fillMaxSize(), gpioRepository)
         }
     }
 }

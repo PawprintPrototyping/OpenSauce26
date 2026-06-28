@@ -27,23 +27,11 @@ android {
         val properties = Properties()
         properties.load(keystoreFile.inputStream())
 
-        val appKey = properties.getProperty("MPSDK_APPLICATION_ID") ?: ""
-        val sqAuthKey = properties.getProperty("MPSDK_ACCESS_TOKEN") ?: ""
-        val locKey = properties.getProperty("MPSDK_LOCATION_ID") ?: ""
+        val appKey = properties.getProperty("SQUARE_APPLICATION_ID") ?: ""
         buildConfigField(
             type = "String",
-            name = "MPSDK_APPLICATION_ID",
+            name = "SQUARE_APPLICATION_ID",
             value = appKey
-        )
-        buildConfigField(
-            type = "String",
-            name = "MPSDK_ACCESS_TOKEN",
-            value = sqAuthKey
-        )
-        buildConfigField(
-            type = "String",
-            name = "MPSDK_LOCATION_ID",
-            value = locKey
         )
     }
 
