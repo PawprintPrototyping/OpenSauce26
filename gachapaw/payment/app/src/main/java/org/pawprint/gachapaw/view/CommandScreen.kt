@@ -34,6 +34,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +67,9 @@ fun CommandScreen(modifier: Modifier, gpioRepository: GpioRepository) {
     )
     val isConnected by commandViewModel.isConnected.collectAsStateWithLifecycle(false)
     val commandUiState by commandViewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        commandViewModel.activityLaunchEvents.collect { context.startActivity(it) }
+    }
     OutlinedCard(
         modifier = modifier.fillMaxSize(),
         colors = CardDefaults.outlinedCardColors(
@@ -176,7 +180,7 @@ fun DebugScreen(
             isActive = serviceState.isPrizeDispenserActive,
         ) {
             FilledTonalButton(
-                onClick = { commandViewModel.enablePrizeDispenser() },
+                onClick = { commandViewModel.unlockPrizeDispenser() },
                 enabled = !serviceState.isPrizeDispenserActive,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 shape = MaterialTheme.shapes.medium
@@ -184,7 +188,7 @@ fun DebugScreen(
                 Text("Release")
             }
             FilledTonalButton(
-                onClick = { commandViewModel.disablePrizeDispenser() },
+                onClick = { commandViewModel.lockPrizeDispenser() },
                 enabled = !serviceState.isPrizeDispenserActive,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 shape = MaterialTheme.shapes.medium

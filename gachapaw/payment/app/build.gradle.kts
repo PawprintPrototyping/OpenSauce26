@@ -81,4 +81,5 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation(libs.com.squareup.sdk)
+    implementation(libs.k.state.machine)
 }
