@@ -1,3 +1,4 @@
 [submodule "gachapaw/payment/app/src/main/cpp/external/liquidcrystal-i2c"]
 	path = gachapaw/payment/app/src/main/cpp/external/liquidcrystal-i2c
-	url = https://github.com/oniongarlic/liquidcrystal-i2c
+	url = git@github-nohi:PawprintPrototyping/liquidcrystal-i2c-android-rpi.git
+	branch = patch
