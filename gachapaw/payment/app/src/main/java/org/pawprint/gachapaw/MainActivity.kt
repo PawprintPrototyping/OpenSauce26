@@ -1,13 +1,10 @@
 package org.pawprint.gachapaw
 
 import android.Manifest.permission.POST_NOTIFICATIONS
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -27,7 +24,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,7 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import org.pawprint.gachapaw.model.LogSeverity
 import org.pawprint.gachapaw.service.GpioRepository
 import org.pawprint.gachapaw.service.GpioService
 import org.pawprint.gachapaw.ui.theme.GashapawTheme
@@ -51,6 +47,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val loggingRepository = (application as PawApplication).loggingRepository
+        loggingRepository.addLog("MainActivity: Application started", LogSeverity.DEBUG)
+
         setContent {
             val context = LocalContext.current
             val gpioRepository = (application as PawApplication).gpioRepository
@@ -68,10 +67,16 @@ class MainActivity : ComponentActivity() {
                 contract = ActivityResultContracts.RequestPermission())
             { isGranted ->
                 hasNotificationPermission = isGranted
+                if (isGranted) {
+                    loggingRepository.addLog("MainActivity: Notification permission granted", LogSeverity.INFO)
+                } else {
+                    loggingRepository.addLog("MainActivity: Notification permission denied", LogSeverity.WARNING)
+                }
             }
             LaunchedEffect(Unit) {
                 // Launch once at when the activity is created
                 if (!hasNotificationPermission) {
+                    loggingRepository.addLog("MainActivity: Requesting notification permission", LogSeverity.DEBUG)
                     requestPermissionLauncher.launch(POST_NOTIFICATIONS)
                 }
             }
@@ -113,6 +118,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startGpioService() {
+        val loggingRepository = (application as PawApplication).loggingRepository
+        loggingRepository.addLog("MainActivity: Starting GpioService", LogSeverity.INFO)
         val intent = Intent(this, GpioService::class.java)
         ContextCompat.startForegroundService(this, intent)
     }

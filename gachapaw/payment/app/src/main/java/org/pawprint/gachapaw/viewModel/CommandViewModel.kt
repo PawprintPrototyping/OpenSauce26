@@ -6,51 +6,35 @@ import android.content.Intent
 import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.result.ActivityResult
-import androidx.compose.runtime.collectAsState
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import org.pawprint.gachapaw.model.ServiceState
-import org.pawprint.gachapaw.model.InputGpioState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
-import org.pawprint.gachapaw.MainActivity
+import org.pawprint.gachapaw.model.LogSeverity
 import org.pawprint.gachapaw.model.TransactionState
 import org.pawprint.gachapaw.service.GpioRepository
 import org.pawprint.gachapaw.service.GpioService
 import org.pawprint.gachapaw.service.GpioServiceState
+import org.pawprint.gachapaw.service.LoggingRepository
 import org.pawprint.gachapaw.service.SquarePaymentRepository
 import kotlin.math.roundToInt
-import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 
 class CommandViewModel(
     private val gpioRepository: GpioRepository,
-    private val squarePaymentRepository: SquarePaymentRepository
+    private val squarePaymentRepository: SquarePaymentRepository,
+    private val loggingRepository: LoggingRepository
 ) : ViewModel() {
     companion object {
         const val LOG_TAG = "CommandViewModel"
         const val RETURN_TIMEOUT = 3_200L
         const val NOTE_DEVELOPMENT = "Gashapaw TEST transaction"
         const val NOTE_PAWB_TRANSACTION = "Pawprint Proto PAW PCB"
-    }
-
-    private val _serviceState = MutableStateFlow(ServiceState())
-    val uiState: StateFlow<ServiceState> = _serviceState.asStateFlow()
-    val isConnected: Flow<Boolean> = gpioRepository.service.map { service ->
-        service is GpioServiceState.Connected
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -65,19 +49,23 @@ class CommandViewModel(
     private val _activityLaunchEvents: MutableSharedFlow<Intent> = MutableSharedFlow()
     val activityLaunchEvents: SharedFlow<Intent> = _activityLaunchEvents.asSharedFlow()
     fun handlePaymentResult(result: ActivityResult) {
+        loggingRepository.addLog("CommandViewModel: Handling payment result", LogSeverity.DEBUG)
         when (result.resultCode) {
             Activity.RESULT_OK -> {
                 val data = result.data ?: return
                 val success = squarePaymentRepository.parseChargeSuccess(data)
                 Log.i(LOG_TAG, "payment succeeded: ${success.clientTransactionId}")
+                loggingRepository.addLog("Payment: Success (TxID: ${success.clientTransactionId})", LogSeverity.INFO)
             }
             Activity.RESULT_CANCELED -> {
                 Log.i(LOG_TAG, "payment cancelled")
+                loggingRepository.addLog("Payment: Cancelled by user", LogSeverity.WARNING)
             }
             else -> {
                 val data = result.data ?: return
                 val failure = squarePaymentRepository.parseChargeError(data)
                 Log.i(LOG_TAG, "payment failed: ${failure.debugDescription}")
+                loggingRepository.addLog("Payment: Failed (${failure.debugDescription})", LogSeverity.ERROR)
             }
         }
     }
@@ -86,10 +74,12 @@ class CommandViewModel(
         val costFloat = cost.toString().toFloatOrNull() ?: 0f
         if (costFloat !in 1.0f..25.0f) {
             Log.d("CommandViewModel", "triggerEnableCardReader unexpected cost: $cost")
+            loggingRepository.addLog("Command: Invalid payment amount: $cost", LogSeverity.WARNING)
             return
         }
         val costInt = (costFloat * 100).roundToInt()
         Log.d("CommandViewModel", "triggerEnableCardReader for $costInt cents")
+        loggingRepository.addLog("Command: Launching Square Reader for $cost", LogSeverity.INFO)
 
         val note = when(_uiState.value.transactionState) {
             TransactionState.MAINTENANCE -> NOTE_DEVELOPMENT
@@ -103,30 +93,61 @@ class CommandViewModel(
         )
         launcher.launch(intent)
         delay((RETURN_TIMEOUT + 1000).milliseconds)
-        if (_uiState.value.isSquareReaderActive) {
+        if (uiState.value.isSquareReaderActive) {
             Log.d("CommandViewModel", "Square Reader timed out, forcing return to main activity")
+            loggingRepository.addLog("Command: Square Reader timed out", LogSeverity.ERROR)
             resetPaymentFlow()
         }
     }
 
     fun enterProdMode() {
-        withConnectedService {
-            it.exitProdMode()
-        }
-    }
-
-    fun enterDebugMode() {
+        loggingRepository.addLog("Command: Requesting Prod Mode", LogSeverity.INFO)
         withConnectedService {
             it.enterProdMode()
         }
     }
 
-    private fun withConnectedService(block: (GpioService) -> Unit) {
-        (gpioRepository.service.value as? GpioServiceState.Connected)?.service?.let(block)
+    fun enterDebugMode() {
+        loggingRepository.addLog("Command: Requesting Debug Mode", LogSeverity.INFO)
+        withConnectedService {
+            it.exitProdMode()
+        }
     }
 
+    fun unlockPrizeDispenser() {
+        loggingRepository.addLog("Command: Unlocking Prize Dispenser", LogSeverity.INFO)
+        withConnectedService {
+            it.setGpioState(5, false)
+        }
+    }
 
-    private suspend fun returnToMain(intent: Intent) {
-        _activityLaunchEvents.emit(intent)
+    fun lockPrizeDispenser() {
+        loggingRepository.addLog("Command: Locking Prize Dispenser", LogSeverity.INFO)
+        withConnectedService {
+            it.setGpioState(5, true)
+        }
+    }
+
+    fun setRandomNeopixelColor() {
+        loggingRepository.addLog("Command: Cycling Neopixel Color", LogSeverity.INFO)
+        withConnectedService {
+            it.setNeopixelColor(org.pawprint.gachapaw.ui.theme.getRandomOpaqueColor())
+        }
+    }
+
+    fun waitForButtonPress() {
+        loggingRepository.addLog("Command: Setting GPIO Latch", LogSeverity.INFO)
+    }
+
+    fun cancelWaitForButtonPress() {
+        loggingRepository.addLog("Command: Cancelling GPIO Latch", LogSeverity.INFO)
+    }
+
+    fun resetPaymentFlow() {
+        loggingRepository.addLog("Command: Resetting Payment Flow", LogSeverity.WARNING)
+    }
+
+    private fun withConnectedService(block: (GpioService) -> Unit) {
+        (gpioRepository.service.value as? GpioServiceState.Connected)?.service?.let(block)
     }
 }

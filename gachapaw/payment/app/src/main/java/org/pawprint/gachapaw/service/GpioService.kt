@@ -14,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -22,6 +21,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.pawprint.gachapaw.PawApplication
+import org.pawprint.gachapaw.model.LogSeverity
 import org.pawprint.gachapaw.model.TransactionState
 import ru.nsk.kstatemachine.event.Event
 import ru.nsk.kstatemachine.state.DefaultState
@@ -81,23 +81,28 @@ class GpioService : LifecycleService() {
     val state = _state.asStateFlow()
     private val gpioManager = GpioManager()
     private val gpioRepository by lazy { (applicationContext as PawApplication).gpioRepository }
+    private val loggingRepository by lazy { (applicationContext as PawApplication).loggingRepository }
     private lateinit var stateMachine: StateMachine
 
     override fun onCreate() {
         Log.d(TAG, "onCreate")
         super.onCreate()
+        loggingRepository.addLog("GpioService: onCreate", LogSeverity.DEBUG)
         createNotificationChannel()
         setNeopixelColor(Color.Red)
         displayOnLcd("Disconnected...")
         lifecycleScope.launch {
             Log.i(TAG, "onCreate: Initializing")
+            loggingRepository.addLog("GpioService: Initializing hardware", LogSeverity.INFO)
             initialize()
             gpioRepository.onServiceStarted(this@GpioService)
+            loggingRepository.addLog("GpioService: Service started and connected to repository", LogSeverity.INFO)
         }
     }
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
+        loggingRepository.addLog("GpioService: onDestroy", LogSeverity.DEBUG)
         super.onDestroy()
         gpioRepository.onServiceStopped()
     }
@@ -113,9 +118,11 @@ class GpioService : LifecycleService() {
         stateMachine = createStateMachine(scope = lifecycleScope, "GashapawSM") {
             onTransitionTriggered {
                 Log.d(TAG, "transition triggered: ${it.transition}")
+                loggingRepository.addLog("SM: Transition triggered: ${it.transition}", LogSeverity.DEBUG)
             }
             onTransitionComplete { activeStates, _ ->
                 Log.d(TAG, "Active state: $activeStates")
+                loggingRepository.addLog("SM: Active state: $activeStates", LogSeverity.INFO)
             }
             // Base transition always moves to maintenance if a state doesn't override.
             transition<EnterMaintenance> {
@@ -126,6 +133,7 @@ class GpioService : LifecycleService() {
                     resetHardwareState()
                     setNeopixelColor(Color.Blue)
                     _state.update { TransactionState.INITIALIZING }
+                    loggingRepository.addLog("SM: State -> Initialize", LogSeverity.DEBUG)
                 }
                 autoTransition {
                     targetState = States.Advertise
@@ -134,12 +142,16 @@ class GpioService : LifecycleService() {
             addState(States.Advertise) {
                 onEntry {
                     _state.update { TransactionState.WAITING_FOR_BUTTON_PRESS }
+                    loggingRepository.addLog("SM: State -> Advertise", LogSeverity.DEBUG)
                     coroutineScope {
                         launch { advertise() }
                         val result = withContext(Dispatchers.IO) {
                             gpioManager.waitForGpioState(expectedState = true)
                         }
-                        if (result == 0) machine.processEvent(ButtonPressed)
+                        if (result == 0) {
+                            loggingRepository.addLog("Hardware: Button pressed!", LogSeverity.INFO)
+                            machine.processEvent(ButtonPressed)
+                        }
                     }
                 }
                 transition<ButtonPressed> {
@@ -150,6 +162,7 @@ class GpioService : LifecycleService() {
                 onEntry {
                     _state.update { TransactionState.WAITING_FOR_TRANSACTION_RESULT }
                     setNeopixelColor(Color.Green)
+                    loggingRepository.addLog("SM: State -> PaymentRequest", LogSeverity.DEBUG)
                     displayOnLcd("TOTAL: $15, Tap or Insert to Pay Om nom nom\n" +
                             "Or press the BUTTON to cancel")
                 }
@@ -170,9 +183,11 @@ class GpioService : LifecycleService() {
                 onEntry {
                     _state.update { TransactionState.TRANSACTION_FAIL }
                     setNeopixelColor(Color.Yellow)
+                    loggingRepository.addLog("SM: State -> PaymentFailed", LogSeverity.WARNING)
                     val triggerEvent = it.event
                     if (triggerEvent is PaymentFinished.Failed) {
                         val reason = triggerEvent.failureReason
+                        loggingRepository.addLog("Payment: Failed with reason: $reason", LogSeverity.ERROR)
                         displayOnLcd("Oops Error: $reason")
                     }
                 }
@@ -181,6 +196,7 @@ class GpioService : LifecycleService() {
                 onEntry {
                     _state.update { TransactionState.TRANSACTION_SUCCESS }
                     setNeopixelColor(Color.Blue)
+                    loggingRepository.addLog("SM: State -> DispenseCookie", LogSeverity.INFO)
                     unlockPrizeDispenser()
                     displayOnLcd("Turn handle CLOCKWISE to receive SNACK")
                     delay(5.seconds)
@@ -198,6 +214,7 @@ class GpioService : LifecycleService() {
                     _state.update { TransactionState.MAINTENANCE }
                     resetHardwareState()
                     setNeopixelColor(Color.Magenta)
+                    loggingRepository.addLog("SM: State -> Maintenance", LogSeverity.INFO)
                 }
                 onExit {
                     resetHardwareState()
@@ -210,58 +227,81 @@ class GpioService : LifecycleService() {
         stateMachine.start()
     }
 
-    fun setGpioState(pin: Int, state: Boolean) {
+    fun setGpioState(pin: Int, state: Boolean, skipLog: Boolean = false) {
         gpioManager.setGpioState(pin, state)
+        if (!skipLog) {
+            loggingRepository.addLog("Hardware: GPIO pin $pin set to $state", LogSeverity.DEBUG)
+        }
     }
 
-    fun setNeopixelColor(color: Color) {
+    fun setNeopixelColor(color: Color, skipLog: Boolean = false) {
         gpioManager.setNeopixelColor(color)
+        if (!skipLog) {
+            loggingRepository.addLog("Hardware: Neopixel color set to $color", LogSeverity.DEBUG)
+        }
     }
 
     suspend fun advertise() {
         while (currentCoroutineContext().isActive) {
-            displayOnLcd(adverts.random())
-            showRainbowEffect(duration = 3.seconds)
+            val advert = adverts.random()
+            displayOnLcd(advert)
+            showRainbowEffect(cycleDuration = 1.seconds, totalDuration = 5.seconds)
         }
         setNeopixelColor(Color.Black)
     }
 
-    suspend fun showRainbowEffect(duration: Duration) {
+    suspend fun showRainbowEffect(cycleDuration: Duration, totalDuration: Duration) {
         val startTime = System.currentTimeMillis()
+        val totalMs = totalDuration.inWholeMilliseconds
+        val cycleMs = cycleDuration.inWholeMilliseconds
+
         while (currentCoroutineContext().isActive) {
-            // Normalize time to a 0.0 - 1.0 range
-            val elapsed = (System.currentTimeMillis() - startTime) % duration.inWholeMilliseconds
-            val progress = elapsed.toFloat() / duration.inWholeMilliseconds.toFloat()
-            // 0-360 represents the full rainbow
+            val now = System.currentTimeMillis()
+            val elapsedTotal = now - startTime
+
+            // Exit the effect after the total duration has passed
+            if (elapsedTotal >= totalMs) break
+
+            // Use modulo to loop the rainbow progress (0.0 to 1.0) within the cycle duration
+            val elapsedCycle = elapsedTotal % cycleMs
+            val progress = elapsedCycle.toFloat() / cycleMs.toFloat()
+
             val hue = progress * 360f
             val color = Color.hsv(hue, 1f, 1f)
-            setNeopixelColor(color)
+            setNeopixelColor(color, skipLog = true)
+
             // Update at roughly 30 FPS for smoothness
             delay(33.milliseconds)
         }
     }
 
     fun enterProdMode() {
+        loggingRepository.addLog("Service: Exiting Maintenance (entering Prod)", LogSeverity.INFO)
         stateMachine.processEventByLaunch(ExitMaintenance)
     }
 
     fun exitProdMode() {
+        loggingRepository.addLog("Service: Entering Maintenance (exiting Prod)", LogSeverity.INFO)
         stateMachine.processEventByLaunch(EnterMaintenance)
     }
 
     private fun cancelWaitForGpio() {
         gpioManager.cancelWaitForGpio()
+        loggingRepository.addLog("Hardware: Cancelled wait for GPIO", LogSeverity.DEBUG)
     }
 
     private fun displayOnLcd(text: String) {
         gpioManager.displayOnLcd(text)
+        loggingRepository.addLog("LCD: Displaying text: $text", LogSeverity.INFO)
     }
 
     private fun unlockPrizeDispenser() {
+        loggingRepository.addLog("Hardware: Unlocking prize dispenser", LogSeverity.INFO)
         setGpioState(5, false)
     }
 
     private fun lockPrizeDispenser() {
+        loggingRepository.addLog("Hardware: Locking prize dispenser", LogSeverity.INFO)
         setGpioState(5, true)
     }
 
@@ -269,6 +309,7 @@ class GpioService : LifecycleService() {
         cancelWaitForGpio()
         lockPrizeDispenser()
         setNeopixelColor(Color.Black)
+        loggingRepository.addLog("Hardware: Resetting hardware state", LogSeverity.DEBUG)
     }
 
     private fun getRandomOpaqueColor(): Color {
