@@ -2,6 +2,7 @@
 #include "tof.h"
 #include "gpio.h"
 #include <stdio.h>
+#include "tof.h"
 
 int main(void) {
     SystemInit();
