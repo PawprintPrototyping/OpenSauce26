@@ -1,375 +1,417 @@
 #include "ch32fun.h"
-#include <stdio.h>
-
-#define CH32V003_I2C_IMPLEMENTATION
-#include "ch32v003_i2c.h"
 #include "tof.h"
 
-#define VL53L1X_ADDRESS 0x29
+// I2C configuration
 
-// Pin Definitions
-#define PIN_XSHUT PC3
+#define I2C_CLKRATE  400000
+#define I2C_PRERATE  2000000
+#define I2C_TIMEOUT  100000
 
-// Register Addresses
-#define SOFT_RESET                                  0x0000
-#define PAD_I2C_HV__EXTSUP_CONFIG                   0x002E
-#define OSC_MEASURED__FAST_OSC__FREQUENCY           0x0006
-#define RESULT__OSC_CALIBRATE_VAL                   0x00DE
-#define DSS_CONFIG__TARGET_TOTAL_RATE_MCPS          0x0024
-#define GPIO__TIO_HV_STATUS                         0x0031
-#define SIGMA_ESTIMATOR__EFFECTIVE_PULSE_WIDTH_NS   0x0036
-#define SIGMA_ESTIMATOR__EFFECTIVE_AMBIENT_WIDTH_NS 0x0037
-#define ALGO__CROSSTALK_COMPENSATION_VALID_HEIGHT_MM 0x0039
-#define ALGO__RANGE_IGNORE_VALID_HEIGHT_MM          0x003E
-#define ALGO__RANGE_MIN_CLIP                        0x003F
-#define ALGO__CONSISTENCY_CHECK__TOLERANCE           0x0040
-#define SYSTEM__THRESH_RATE_HIGH                    0x0050
-#define SYSTEM__THRESH_RATE_LOW                     0x0052
-#define DSS_CONFIG__APERTURE_ATTENUATION            0x0057
-#define RANGE_CONFIG__SIGMA_THRESH                  0x0064
-#define RANGE_CONFIG__MIN_COUNT_RATE_RTN_LIMIT_MCPS 0x0066
-#define SYSTEM__GROUPED_PARAMETER_HOLD_0            0x0071
-#define SYSTEM__GROUPED_PARAMETER_HOLD_1            0x007C
-#define SD_CONFIG__QUANTIFIER                       0x007E
-#define SYSTEM__GROUPED_PARAMETER_HOLD              0x0082
-#define SYSTEM__SEED_CONFIG                         0x0077
-#define SYSTEM__SEQUENCE_CONFIG                     0x0081
-#define DSS_CONFIG__MANUAL_EFFECTIVE_SPADS_SELECT   0x0054
-#define DSS_CONFIG__ROI_MODE_CONTROL                0x004F
-#define ALGO__PART_TO_PART_RANGE_OFFSET_MM          0x001E
-#define MM_CONFIG__OUTER_OFFSET_MM                  0x0022
-#define RANGE_CONFIG__VCSEL_PERIOD_A                0x0060
-#define RANGE_CONFIG__VCSEL_PERIOD_B                0x0063
-#define RANGE_CONFIG__VALID_PHASE_HIGH              0x0069
-#define SD_CONFIG__WOI_SD0                          0x0078
-#define SD_CONFIG__WOI_SD1                          0x0079
-#define SD_CONFIG__INITIAL_PHASE_SD0                0x007A
-#define SD_CONFIG__INITIAL_PHASE_SD1                0x007B
-#define PHASECAL_CONFIG__TIMEOUT_MACROP             0x004B
-#define MM_CONFIG__TIMEOUT_MACROP_A                 0x005A
-#define RANGE_CONFIG__TIMEOUT_MACROP_A              0x005E
-#define MM_CONFIG__TIMEOUT_MACROP_B                 0x005C
-#define RANGE_CONFIG__TIMEOUT_MACROP_B              0x0061
-#define SYSTEM__INTERMEASUREMENT_PERIOD             0x006C
-#define SYSTEM__INTERRUPT_CLEAR                     0x0086
-#define SYSTEM__MODE_START                          0x0087
-#define PHASECAL_CONFIG__OVERRIDE                   0x004D
-#define CAL_CONFIG__VCSEL_START                     0x0047
-#define PHASECAL_RESULT__VCSEL_START                0x00D8
-#define VHV_CONFIG__INIT                            0x000B
-#define VHV_CONFIG__TIMEOUT_MACROP_LOOP_BOUND       0x0008
+#define I2C_EVT_MASTER_MODE_SELECT              ((uint32_t)0x00030001)
+#define I2C_EVT_MASTER_TX_MODE_SELECTED         ((uint32_t)0x00070082)
+#define I2C_EVT_MASTER_RX_MODE_SELECTED         ((uint32_t)0x00030002)
+#define I2C_EVT_MASTER_BYTE_TRANSMITTED         ((uint32_t)0x00070084)
 
-// Global State
-static uint16_t fast_osc_frequency = 0;
-static uint16_t osc_calibrate_val = 0;
-static uint8_t saved_vhv_init = 0;
-static uint8_t saved_vhv_timeout = 0;
-static bool calibrated = false;
+static uint8_t i2c_addr = TOF_I2C_ADDR;
 
-struct VL53L1X_Results {
-    uint8_t range_status;
-    uint8_t stream_count;
-    uint16_t dss_actual_effective_spads_sd0;
-    uint16_t ambient_count_rate_mcps_sd0;
-    uint16_t final_crosstalk_corrected_range_mm_sd0;
-    uint16_t peak_signal_count_rate_crosstalk_corrected_mcps_sd0;
-} results;
-
-// Register Write Helpers
-static void vl53l1x_write_reg8(uint16_t reg, uint8_t val) {
-    i2c_write(VL53L1X_ADDRESS, reg, I2C_REGADDR_2B, &val, 1);
+static inline uint8_t i2c_chk_evt(uint32_t mask) {
+    uint32_t status = I2C1->STAR1 | ((uint32_t)I2C1->STAR2 << 16);
+    return (status & mask) == mask;
 }
 
-static void vl53l1x_write_reg16(uint16_t reg, uint16_t val) {
+static void i2c_setup(void) {
+    funGpioInitAll();
+    funPinMode(PC1, GPIO_CFGLR_OUT_10Mhz_AF_OD);
+    funPinMode(PC2, GPIO_CFGLR_OUT_10Mhz_AF_OD);
+
+    RCC->APB1PCENR |= RCC_APB1Periph_I2C1;
+
+    RCC->APB1PRSTR |= RCC_APB1Periph_I2C1;
+    RCC->APB1PRSTR &= ~RCC_APB1Periph_I2C1;
+
+    uint16_t tempreg = I2C1->CTLR2;
+    tempreg &= ~I2C_CTLR2_FREQ;
+    tempreg |= (FUNCONF_SYSTEM_CORE_CLOCK / I2C_PRERATE) & I2C_CTLR2_FREQ;
+    I2C1->CTLR2 = tempreg;
+
+    tempreg = (FUNCONF_SYSTEM_CORE_CLOCK / (3 * I2C_CLKRATE)) & I2C_CKCFGR_CCR;
+    tempreg |= I2C_CKCFGR_FS;
+    I2C1->CKCFGR = tempreg;
+
+    I2C1->CTLR1 |= I2C_CTLR1_PE;
+    I2C1->CTLR1 |= I2C_CTLR1_ACK;
+}
+
+static int8_t i2c_write(uint16_t reg, const uint8_t *data, uint16_t len) {
+    int32_t timeout;
+
+    timeout = I2C_TIMEOUT;
+    while ((I2C1->STAR2 & I2C_STAR2_BUSY) && (timeout--));
+    if (timeout < 0) return -1;
+
+    I2C1->CTLR1 |= I2C_CTLR1_START;
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_MODE_SELECT) && (timeout--));
+    if (timeout < 0) return -1;
+
+    I2C1->DATAR = i2c_addr << 1;
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_TX_MODE_SELECTED) && (timeout--));
+    if (timeout < 0) return -1;
+
+    // 16-bit register address, MSB first
+    timeout = I2C_TIMEOUT;
+    while (!(I2C1->STAR1 & I2C_STAR1_TXE) && (timeout--));
+    if (timeout < 0) return -1;
+    I2C1->DATAR = (reg >> 8) & 0xFF;
+
+    timeout = I2C_TIMEOUT;
+    while (!(I2C1->STAR1 & I2C_STAR1_TXE) && (timeout--));
+    if (timeout < 0) return -1;
+    I2C1->DATAR = reg & 0xFF;
+
+    for (uint16_t i = 0; i < len; i++) {
+        timeout = I2C_TIMEOUT;
+        while (!(I2C1->STAR1 & I2C_STAR1_TXE) && (timeout--));
+        if (timeout < 0) return -1;
+        I2C1->DATAR = data[i];
+    }
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_BYTE_TRANSMITTED) && (timeout--));
+    if (timeout < 0) return -1;
+
+    I2C1->CTLR1 |= I2C_CTLR1_STOP;
+    return 0;
+}
+
+static int8_t i2c_read(uint16_t reg, uint8_t *data, uint16_t len) {
+    int32_t timeout;
+
+    // Phase 1: write register address
+    timeout = I2C_TIMEOUT;
+    while ((I2C1->STAR2 & I2C_STAR2_BUSY) && (timeout--));
+    if (timeout < 0) return -1;
+
+    I2C1->CTLR1 |= I2C_CTLR1_START;
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_MODE_SELECT) && (timeout--));
+    if (timeout < 0) return -1;
+
+    I2C1->DATAR = i2c_addr << 1;
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_TX_MODE_SELECTED) && (timeout--));
+    if (timeout < 0) return -1;
+
+    timeout = I2C_TIMEOUT;
+    while (!(I2C1->STAR1 & I2C_STAR1_TXE) && (timeout--));
+    if (timeout < 0) return -1;
+    I2C1->DATAR = (reg >> 8) & 0xFF;
+
+    timeout = I2C_TIMEOUT;
+    while (!(I2C1->STAR1 & I2C_STAR1_TXE) && (timeout--));
+    if (timeout < 0) return -1;
+    I2C1->DATAR = reg & 0xFF;
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_BYTE_TRANSMITTED) && (timeout--));
+    if (timeout < 0) return -1;
+
+    // Phase 2: repeated start, read data
+    I2C1->CTLR1 |= I2C_CTLR1_START;
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_MODE_SELECT) && (timeout--));
+    if (timeout < 0) return -1;
+
+    I2C1->DATAR = (i2c_addr << 1) | 1;
+
+    timeout = I2C_TIMEOUT;
+    while (!i2c_chk_evt(I2C_EVT_MASTER_RX_MODE_SELECTED) && (timeout--));
+    if (timeout < 0) return -1;
+
+    for (uint16_t i = 0; i < len; i++) {
+        if (i == len - 1) {
+            I2C1->CTLR1 &= ~I2C_CTLR1_ACK;
+            I2C1->CTLR1 |= I2C_CTLR1_STOP;
+        }
+        timeout = I2C_TIMEOUT;
+        while (!(I2C1->STAR1 & I2C_STAR1_RXNE) && (timeout--));
+        if (timeout < 0) return -1;
+        data[i] = I2C1->DATAR;
+    }
+
+    I2C1->CTLR1 |= I2C_CTLR1_ACK;
+    return 0;
+}
+
+// Register access helpers
+
+static int8_t tof_wr_byte(uint16_t reg, uint8_t val) {
+    return i2c_write(reg, &val, 1);
+}
+
+static int8_t tof_wr_word(uint16_t reg, uint16_t val) {
+    uint8_t buf[2] = { val >> 8, val & 0xFF };
+    return i2c_write(reg, buf, 2);
+}
+
+static int8_t tof_wr_dword(uint16_t reg, uint32_t val) {
+    uint8_t buf[4] = {
+        (val >> 24) & 0xFF,
+        (val >> 16) & 0xFF,
+        (val >>  8) & 0xFF,
+        val & 0xFF
+    };
+    return i2c_write(reg, buf, 4);
+}
+
+static int8_t tof_rd_byte(uint16_t reg, uint8_t *val) {
+    return i2c_read(reg, val, 1);
+}
+
+static int8_t tof_rd_word(uint16_t reg, uint16_t *val) {
     uint8_t buf[2];
-    buf[0] = (val >> 8) & 0xFF;
-    buf[1] = val & 0xFF;
-    i2c_write(VL53L1X_ADDRESS, reg, I2C_REGADDR_2B, buf, 2);
+    int8_t s = i2c_read(reg, buf, 2);
+    if (!s) *val = ((uint16_t)buf[0] << 8) | buf[1];
+    return s;
 }
 
-static void vl53l1x_write_reg32(uint16_t reg, uint32_t val) {
-    uint8_t buf[4];
-    buf[0] = (val >> 24) & 0xFF;
-    buf[1] = (val >> 16) & 0xFF;
-    buf[2] = (val >> 8) & 0xFF;
-    buf[3] = val & 0xFF;
-    i2c_write(VL53L1X_ADDRESS, reg, I2C_REGADDR_2B, buf, 4);
+// VL53L1X register1s
+
+#define VL53L1X_VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND  0x0008
+#define VL53L1X_FIRMWARE_SYSTEM_STATUS                0x00E5
+#define VL53L1X_IDENTIFICATION_MODEL_ID               0x010F
+#define VL53L1X_RESULT_OSC_CALIBRATE_VAL              0x00DE
+#define VL53L1X_SYSTEM_INTERMEASUREMENT_PERIOD        0x006C
+#define VL53L1X_RESULT_RANGE_STATUS                   0x0089
+#define VL53L1X_RESULT_FINAL_RANGE_MM_SD0             0x0096
+
+#define GPIO_HV_MUX_CTRL                0x0030
+#define GPIO_TIO_HV_STATUS              0x0031
+#define SYSTEM_INTERRUPT_CONFIG_GPIO     0x0046
+#define PHASECAL_CONFIG_TIMEOUT_MACROP   0x004B
+#define RANGE_CONFIG_TIMEOUT_MACROP_A_HI 0x005E
+#define RANGE_CONFIG_VCSEL_PERIOD_A      0x0060
+#define RANGE_CONFIG_TIMEOUT_MACROP_B_HI 0x0061
+#define RANGE_CONFIG_VCSEL_PERIOD_B      0x0063
+#define RANGE_CONFIG_VALID_PHASE_HIGH    0x0069
+#define SD_CONFIG_WOI_SD0                0x0078
+#define SD_CONFIG_INITIAL_PHASE_SD0      0x007A
+#define SYSTEM_INTERRUPT_CLEAR           0x0086
+#define SYSTEM_MODE_START                0x0087
+
+// 91 bytes written to registers 0x2D..0x87 during init
+static const uint8_t vl53l1x_default_config[] = {
+    0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x02, 0x08,
+    0x00, 0x08, 0x10, 0x01, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0xff, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x20, 0x0b, 0x00, 0x00, 0x02, 0x0a, 0x21,
+    0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0xc8,
+    0x00, 0x00, 0x38, 0xff, 0x01, 0x00, 0x08, 0x00,
+    0x00, 0x01, 0xcc, 0x0f, 0x01, 0xf1, 0x0d, 0x01,
+    0x68, 0x00, 0x80, 0x08, 0xb8, 0x00, 0x00, 0x00,
+    0x00, 0x0f, 0x89, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x0f, 0x0d, 0x0e, 0x0e, 0x00,
+    0x00, 0x02, 0xc7, 0xff, 0x9B, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00
+};
+
+int8_t tof_get_sensor_id(uint16_t *id) {
+    return tof_rd_word(VL53L1X_IDENTIFICATION_MODEL_ID, id);
 }
 
-// Register Read Helpers
-static uint8_t vl53l1x_read_reg8(uint16_t reg) {
-    uint8_t val = 0;
-    i2c_read(VL53L1X_ADDRESS, reg, I2C_REGADDR_2B, &val, 1);
-    return val;
+int8_t tof_start_ranging(void) {
+    return tof_wr_byte(SYSTEM_MODE_START, 0x40);
 }
 
-static uint16_t vl53l1x_read_reg16(uint16_t reg) {
-    uint8_t buf[2] = {0, 0};
-    i2c_read(VL53L1X_ADDRESS, reg, I2C_REGADDR_2B, buf, 2);
-    return ((uint16_t)buf[0] << 8) | buf[1];
+int8_t tof_stop_ranging(void) {
+    return tof_wr_byte(SYSTEM_MODE_START, 0x00);
 }
 
+int8_t tof_clear_interrupt(void) {
+    return tof_wr_byte(SYSTEM_INTERRUPT_CLEAR, 0x01);
+}
 
-static uint16_t encodeTimeout(uint32_t timeout_mclks) {
-    if (timeout_mclks == 0) return 0;
-    uint32_t ls_byte = timeout_mclks - 1;
-    uint16_t ms_byte = 0;
-    while ((ls_byte & 0xFFFFFF00) > 0) {
-        ls_byte >>= 1;
-        ms_byte++;
+int8_t tof_check_data_ready(uint8_t *ready) {
+    uint8_t gpio_hv, polarity;
+    int8_t s;
+
+    s = tof_rd_byte(GPIO_HV_MUX_CTRL, &gpio_hv);
+    if (s) return s;
+    polarity = !((gpio_hv >> 4) & 1);
+
+    s = tof_rd_byte(GPIO_TIO_HV_STATUS, &gpio_hv);
+    if (s) return s;
+
+    *ready = ((gpio_hv & 1) == polarity) ? 1 : 0;
+    return 0;
+}
+
+int8_t tof_get_distance(uint16_t *distance_mm) {
+    return tof_rd_word(VL53L1X_RESULT_FINAL_RANGE_MM_SD0, distance_mm);
+}
+
+int8_t tof_get_range_status(uint8_t *status) {
+    uint8_t raw;
+    int8_t s = tof_rd_byte(VL53L1X_RESULT_RANGE_STATUS, &raw);
+    if (s) return s;
+
+    raw &= 0x1F;
+    switch (raw) {
+        case 9:  *status = 0; break;
+        case 6:  *status = 1; break;
+        case 4:  *status = 2; break;
+        case 8:  *status = 3; break;
+        case 5:  *status = 4; break;
+        case 3:  *status = 5; break;
+        case 19: *status = 6; break;
+        case 7:  *status = 7; break;
+        case 12: *status = 9; break;
+        case 18: *status = 10; break;
+        case 22: *status = 11; break;
+        case 23: *status = 12; break;
+        case 13: *status = 13; break;
+        default: *status = 255; break;
     }
-    return (ms_byte << 8) | (ls_byte & 0xFF);
+    return 0;
 }
 
-static uint32_t timeoutMicrosecondsToMclks(uint32_t timeout_us, uint32_t macro_period_us) {
-    return (((uint32_t)timeout_us << 12) + (macro_period_us >> 1)) / macro_period_us;
-}
-
-static uint32_t calcMacroPeriod(uint8_t vcsel_period) {
-    uint32_t pll_period_us = ((uint32_t)0x01 << 30) / fast_osc_frequency;
-    uint8_t vcsel_period_pclks = (vcsel_period + 1) << 1;
-    uint32_t macro_period_us = (uint32_t)2304 * pll_period_us;
-    macro_period_us >>= 6;
-    macro_period_us *= vcsel_period_pclks;
-    macro_period_us >>= 6;
-    return macro_period_us;
-}
-
-// Distance and timing budget configuration
-static void vl53l1x_set_distance_mode_long_50ms(void) {
-    // 1. Long range settings
-    vl53l1x_write_reg8(RANGE_CONFIG__VCSEL_PERIOD_A, 0x0F);
-    vl53l1x_write_reg8(RANGE_CONFIG__VCSEL_PERIOD_B, 0x0D);
-    vl53l1x_write_reg8(RANGE_CONFIG__VALID_PHASE_HIGH, 0xB8);
-
-    vl53l1x_write_reg8(SD_CONFIG__WOI_SD0, 0x0F);
-    vl53l1x_write_reg8(SD_CONFIG__WOI_SD1, 0x0D);
-    vl53l1x_write_reg8(SD_CONFIG__INITIAL_PHASE_SD0, 14);
-    vl53l1x_write_reg8(SD_CONFIG__INITIAL_PHASE_SD1, 14);
-    
-    // 2. Timing budget settings (50ms = 50000us)
-    uint32_t budget_us = 50000;
-    uint32_t range_config_timeout_us = budget_us - 1910; // Subtract TimingGuard
-    range_config_timeout_us /= 2;
-    
-    uint32_t macro_period_us = calcMacroPeriod(0x0F); // VCSEL_PERIOD_A
-    
-    // Phase timeout
-    uint32_t phasecal_timeout_mclks = timeoutMicrosecondsToMclks(1000, macro_period_us);
-    if (phasecal_timeout_mclks > 0xFF) phasecal_timeout_mclks = 0xFF;
-    vl53l1x_write_reg8(PHASECAL_CONFIG__TIMEOUT_MACROP, phasecal_timeout_mclks);
-    
-    // MM Timing A timeout
-    vl53l1x_write_reg16(MM_CONFIG__TIMEOUT_MACROP_A, encodeTimeout(timeoutMicrosecondsToMclks(1, macro_period_us)));
-    
-    // Range Timing A timeout
-    vl53l1x_write_reg16(RANGE_CONFIG__TIMEOUT_MACROP_A, encodeTimeout(timeoutMicrosecondsToMclks(range_config_timeout_us, macro_period_us)));
-    
-    macro_period_us = calcMacroPeriod(0x0D); // VCSEL_PERIOD_B
-    
-    // MM Timing B timeout
-    vl53l1x_write_reg16(MM_CONFIG__TIMEOUT_MACROP_B, encodeTimeout(timeoutMicrosecondsToMclks(1, macro_period_us)));
-    
-    // Range Timing B timeout
-    vl53l1x_write_reg16(RANGE_CONFIG__TIMEOUT_MACROP_B, encodeTimeout(timeoutMicrosecondsToMclks(range_config_timeout_us, macro_period_us)));
-}
-
-// Low Power Auto manual calibration setup
-static void vl53l1x_setup_manual_calibration(void) {
-    saved_vhv_init = vl53l1x_read_reg8(VHV_CONFIG__INIT);
-    saved_vhv_timeout = vl53l1x_read_reg8(VHV_CONFIG__TIMEOUT_MACROP_LOOP_BOUND);
-    
-    // Disable VHV init
-    vl53l1x_write_reg8(VHV_CONFIG__INIT, saved_vhv_init & 0x7F);
-    
-    // Set loop bound
-    vl53l1x_write_reg8(VHV_CONFIG__TIMEOUT_MACROP_LOOP_BOUND, (saved_vhv_timeout & 0x03) + (3 << 2));
-    
-    // Override phasecal
-    vl53l1x_write_reg8(PHASECAL_CONFIG__OVERRIDE, 0x01);
-    vl53l1x_write_reg8(CAL_CONFIG__VCSEL_START, vl53l1x_read_reg8(PHASECAL_RESULT__VCSEL_START));
-}
-
-// Dynamic SPAD Selection
-static void vl53l1x_update_dss(void) {
-    uint16_t spadCount = results.dss_actual_effective_spads_sd0;
-    if (spadCount != 0) {
-        uint32_t totalRatePerSpad = (uint32_t)results.peak_signal_count_rate_crosstalk_corrected_mcps_sd0 +
-                                    results.ambient_count_rate_mcps_sd0;
-        if (totalRatePerSpad > 0xFFFF) totalRatePerSpad = 0xFFFF;
-        totalRatePerSpad <<= 16;
-        totalRatePerSpad /= spadCount;
-        if (totalRatePerSpad != 0) {
-            uint32_t requiredSpads = ((uint32_t)0x0A00 << 16) / totalRatePerSpad;
-            if (requiredSpads > 0xFFFF) requiredSpads = 0xFFFF;
-            vl53l1x_write_reg16(DSS_CONFIG__MANUAL_EFFECTIVE_SPADS_SELECT, requiredSpads);
-            return;
-        }
+int8_t tof_set_distance_mode(uint16_t mode) {
+    int8_t s;
+    switch (mode) {
+        case 1:
+            s = tof_wr_byte(PHASECAL_CONFIG_TIMEOUT_MACROP, 0x14);
+            if (s) return s;
+            s = tof_wr_byte(RANGE_CONFIG_VCSEL_PERIOD_A, 0x07);
+            if (s) return s;
+            s = tof_wr_byte(RANGE_CONFIG_VCSEL_PERIOD_B, 0x05);
+            if (s) return s;
+            s = tof_wr_byte(RANGE_CONFIG_VALID_PHASE_HIGH, 0x38);
+            if (s) return s;
+            s = tof_wr_word(SD_CONFIG_WOI_SD0, 0x0705);
+            if (s) return s;
+            s = tof_wr_word(SD_CONFIG_INITIAL_PHASE_SD0, 0x0606);
+            break;
+        case 2:
+            s = tof_wr_byte(PHASECAL_CONFIG_TIMEOUT_MACROP, 0x0A);
+            if (s) return s;
+            s = tof_wr_byte(RANGE_CONFIG_VCSEL_PERIOD_A, 0x0F);
+            if (s) return s;
+            s = tof_wr_byte(RANGE_CONFIG_VCSEL_PERIOD_B, 0x0D);
+            if (s) return s;
+            s = tof_wr_byte(RANGE_CONFIG_VALID_PHASE_HIGH, 0xB8);
+            if (s) return s;
+            s = tof_wr_word(SD_CONFIG_WOI_SD0, 0x0F0D);
+            if (s) return s;
+            s = tof_wr_word(SD_CONFIG_INITIAL_PHASE_SD0, 0x0E0E);
+            break;
+        default:
+            return -1;
     }
-    vl53l1x_write_reg16(DSS_CONFIG__MANUAL_EFFECTIVE_SPADS_SELECT, 0x8000);
+    return s;
 }
 
-// API implementation
+int8_t tof_set_timing_budget_ms(uint16_t budget_ms) {
+    uint16_t dm;
+    uint8_t tmp;
+    int8_t s;
 
-bool tof_init(void) {
-    // 1. Initialize hardware pin for XSHUT
-    funPinMode(PIN_XSHUT, GPIO_CFGLR_OUT_10Mhz_PP);
-    
-    // 2. Perform sensor reset via XSHUT pin
-    funDigitalWrite(PIN_XSHUT, FUN_LOW);
-    Delay_Ms(10);
-    funDigitalWrite(PIN_XSHUT, FUN_HIGH);
-    Delay_Ms(10);
-    
-    // 3. Initialize I2C Master
-    i2c_init();
-    
-    // 4. Verify sensor model ID (should be 0xEACC)
-    uint16_t model_id = vl53l1x_read_reg16(0x010F);
-    if (model_id != 0xEACC) {
-        printf("TOF Init Failed: Model ID mismatch! Expected 0xEACC, got 0x%04X\n", model_id);
-        return false;
-    }
-    
-    // 5. Software Reset
-    vl53l1x_write_reg8(SOFT_RESET, 0x00);
-    Delay_Us(100);
-    vl53l1x_write_reg8(SOFT_RESET, 0x01);
-    Delay_Ms(2);
-    
-    // 6. Poll for boot completion
-    uint32_t timeout = 5000;
-    while ((vl53l1x_read_reg8(0x00E5) & 0x01) == 0) {
-        Delay_Us(100);
-        if (--timeout == 0) {
-            printf("TOF Init Failed: Sensor boot timeout!\n");
-            return false;
-        }
-    }
-    
-    // 7. Enable 2.8V mode
-    vl53l1x_write_reg8(PAD_I2C_HV__EXTSUP_CONFIG, vl53l1x_read_reg8(PAD_I2C_HV__EXTSUP_CONFIG) | 0x01);
-    
-    // 8. Read oscillator calibration data
-    fast_osc_frequency = vl53l1x_read_reg16(OSC_MEASURED__FAST_OSC__FREQUENCY);
-    osc_calibrate_val = vl53l1x_read_reg16(RESULT__OSC_CALIBRATE_VAL);
-    
-    // 9. Static config
-    vl53l1x_write_reg16(DSS_CONFIG__TARGET_TOTAL_RATE_MCPS, 0x0A00);
-    vl53l1x_write_reg8(GPIO__TIO_HV_STATUS, 0x02);
-    vl53l1x_write_reg8(SIGMA_ESTIMATOR__EFFECTIVE_PULSE_WIDTH_NS, 8);
-    vl53l1x_write_reg8(SIGMA_ESTIMATOR__EFFECTIVE_AMBIENT_WIDTH_NS, 16);
-    vl53l1x_write_reg8(ALGO__CROSSTALK_COMPENSATION_VALID_HEIGHT_MM, 0x01);
-    vl53l1x_write_reg8(ALGO__RANGE_IGNORE_VALID_HEIGHT_MM, 0xFF);
-    vl53l1x_write_reg8(ALGO__RANGE_MIN_CLIP, 0);
-    vl53l1x_write_reg8(ALGO__CONSISTENCY_CHECK__TOLERANCE, 2);
-    
-    // 10. General config
-    vl53l1x_write_reg16(SYSTEM__THRESH_RATE_HIGH, 0x0000);
-    vl53l1x_write_reg16(SYSTEM__THRESH_RATE_LOW, 0x0000);
-    vl53l1x_write_reg8(DSS_CONFIG__APERTURE_ATTENUATION, 0x38);
-    
-    // 11. Timing config
-    vl53l1x_write_reg16(RANGE_CONFIG__SIGMA_THRESH, 360);
-    vl53l1x_write_reg16(RANGE_CONFIG__MIN_COUNT_RATE_RTN_LIMIT_MCPS, 192);
-    
-    // 12. Dynamic config
-    vl53l1x_write_reg8(SYSTEM__GROUPED_PARAMETER_HOLD_0, 0x01);
-    vl53l1x_write_reg8(SYSTEM__GROUPED_PARAMETER_HOLD_1, 0x01);
-    vl53l1x_write_reg8(SD_CONFIG__QUANTIFIER, 2);
-    
-    vl53l1x_write_reg8(SYSTEM__GROUPED_PARAMETER_HOLD, 0x00);
-    vl53l1x_write_reg8(SYSTEM__SEED_CONFIG, 1);
-    
-    // 13. Mode and SPAD config
-    vl53l1x_write_reg8(SYSTEM__SEQUENCE_CONFIG, 0x8B); // VHV, PHASECAL, DSS1, RANGE
-    vl53l1x_write_reg16(DSS_CONFIG__MANUAL_EFFECTIVE_SPADS_SELECT, 200 << 8);
-    vl53l1x_write_reg8(DSS_CONFIG__ROI_MODE_CONTROL, 2);
-    
-    // 14. Configure distance mode and timing budget (Long, 50ms)
-    vl53l1x_set_distance_mode_long_50ms();
-    
-    // 15. Outer offset range config
-    vl53l1x_write_reg16(ALGO__PART_TO_PART_RANGE_OFFSET_MM, vl53l1x_read_reg16(MM_CONFIG__OUTER_OFFSET_MM) * 4);
-    
-    calibrated = false;
-    return true;
-}
+    s = tof_rd_byte(PHASECAL_CONFIG_TIMEOUT_MACROP, &tmp);
+    if (s) return s;
+    dm = (tmp == 0x14) ? 1 : 2;
 
-void tof_start_ranging(void) {
-    calibrated = false;
-    // Set measurement period (using 50ms * calibration factor)
-    vl53l1x_write_reg32(SYSTEM__INTERMEASUREMENT_PERIOD, 50 * osc_calibrate_val);
-    
-    // Clear any pending interrupt
-    vl53l1x_write_reg8(SYSTEM__INTERRUPT_CLEAR, 0x01);
-    
-    // Start continuous ranging in timed mode
-    vl53l1x_write_reg8(SYSTEM__MODE_START, 0x40);
-}
-
-void tof_stop_ranging(void) {
-    // Abort ongoing ranging
-    vl53l1x_write_reg8(SYSTEM__MODE_START, 0x80);
-    calibrated = false;
-    
-    // Restore VHV configs and remove phasecal override
-    if (saved_vhv_init != 0) {
-        vl53l1x_write_reg8(VHV_CONFIG__INIT, saved_vhv_init);
-    }
-    if (saved_vhv_timeout != 0) {
-        vl53l1x_write_reg8(VHV_CONFIG__TIMEOUT_MACROP_LOOP_BOUND, saved_vhv_timeout);
-    }
-    vl53l1x_write_reg8(PHASECAL_CONFIG__OVERRIDE, 0x00);
-}
-
-bool tof_data_ready(void) {
-    // Active low output on GPIO status indicates data is ready
-    return (vl53l1x_read_reg8(GPIO__TIO_HV_STATUS) & 0x01) == 0;
-}
-
-uint16_t tof_read_distance(bool blocking) {
-    if (blocking) {
-        uint32_t timeout = 100000;
-        while (!tof_data_ready()) {
-            Delay_Us(10);
-            if (--timeout == 0) {
-                printf("TOF: Read timeout waiting for data ready!\n");
-                return 0;
-            }
+    uint16_t a, b;
+    if (dm == 1) {
+        switch (budget_ms) {
+            case 15:  a = 0x001D; b = 0x0027; break;
+            case 20:  a = 0x0051; b = 0x006E; break;
+            case 33:  a = 0x00D6; b = 0x006E; break;
+            case 50:  a = 0x01AE; b = 0x01E8; break;
+            case 100: a = 0x02E1; b = 0x0388; break;
+            case 200: a = 0x03E1; b = 0x0496; break;
+            case 500: a = 0x0591; b = 0x05C1; break;
+            default: return -1;
         }
     } else {
-        if (!tof_data_ready()) {
-            return 0;
+        switch (budget_ms) {
+            case 20:  a = 0x001E; b = 0x0022; break;
+            case 33:  a = 0x0060; b = 0x006E; break;
+            case 50:  a = 0x00AD; b = 0x00C6; break;
+            case 100: a = 0x01CC; b = 0x01EA; break;
+            case 200: a = 0x02D9; b = 0x02F8; break;
+            case 500: a = 0x048F; b = 0x04A4; break;
+            default: return -1;
         }
     }
-    
-    // Read the 17 bytes of results from RESULT__RANGE_STATUS
-    uint8_t buf[17];
-    i2c_read(VL53L1X_ADDRESS, 0x0089, I2C_REGADDR_2B, buf, 17);
-    
-    results.range_status = buf[0];
-    results.stream_count = buf[2];
-    results.dss_actual_effective_spads_sd0 = ((uint16_t)buf[3] << 8) | buf[4];
-    results.ambient_count_rate_mcps_sd0 = ((uint16_t)buf[7] << 8) | buf[8];
-    results.final_crosstalk_corrected_range_mm_sd0 = ((uint16_t)buf[13] << 8) | buf[14];
-    results.peak_signal_count_rate_crosstalk_corrected_mcps_sd0 = ((uint16_t)buf[15] << 8) | buf[16];
-    
-    // Perform manual calibration on the first range
-    if (!calibrated) {
-        vl53l1x_setup_manual_calibration();
-        calibrated = true;
+
+    s = tof_wr_word(RANGE_CONFIG_TIMEOUT_MACROP_A_HI, a);
+    if (s) return s;
+    return tof_wr_word(RANGE_CONFIG_TIMEOUT_MACROP_B_HI, b);
+}
+
+int8_t tof_set_inter_measurement_ms(uint16_t period_ms) {
+    uint16_t osc;
+    int8_t s = tof_rd_word(VL53L1X_RESULT_OSC_CALIBRATE_VAL, &osc);
+    if (s) return s;
+    osc &= 0x3FF;
+    uint32_t val = (uint32_t)((float)osc * (float)period_ms * 1.075f);
+    return tof_wr_dword(VL53L1X_SYSTEM_INTERMEASUREMENT_PERIOD, val);
+}
+
+int8_t tof_init(void) {
+    int8_t s;
+    uint8_t boot = 0;
+
+    i2c_setup();
+    Delay_Ms(2);
+
+    // Wait for sensor to boot
+    for (int i = 0; i < 1000 && !boot; i++) {
+        s = tof_rd_byte(VL53L1X_FIRMWARE_SYSTEM_STATUS, &boot);
+        if (s) return s;
+        Delay_Ms(2);
     }
-    
-    // Update DSS
-    vl53l1x_update_dss();
-    
-    // Get corrected distance
-    uint16_t raw_range = results.final_crosstalk_corrected_range_mm_sd0;
-    uint16_t range_mm = ((uint32_t)raw_range * 2011 + 0x0400) / 0x0800;
-    
-    // Clear interrupt to trigger next measurement
-    vl53l1x_write_reg8(SYSTEM__INTERRUPT_CLEAR, 0x01);
-    
-    return range_mm;
+    if (!boot) return -1;
+
+    // Write default configuration blob (registers 0x2D to 0x87)
+    for (uint8_t addr = 0x2D; addr <= 0x87; addr++) {
+        s = tof_wr_byte(addr, vl53l1x_default_config[addr - 0x2D]);
+        if (s) return s;
+    }
+
+    // Do one ranging cycle to validate
+    s = tof_start_ranging();
+    if (s) return s;
+
+    uint8_t ready = 0;
+    for (int i = 0; i < 1000 && !ready; i++) {
+        s = tof_check_data_ready(&ready);
+        if (s) return s;
+        Delay_Ms(1);
+    }
+
+    s = tof_clear_interrupt();
+    if (s) return s;
+    s = tof_stop_ranging();
+    if (s) return s;
+
+    // VHV config: two bounds
+    s = tof_wr_byte(VL53L1X_VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND, 0x09);
+    if (s) return s;
+    s = tof_wr_byte(0x0B, 0x00);
+    if (s) return s;
+
+    // Default: long distance mode, 100ms timing budget, 100ms inter-measurement
+    s = tof_set_distance_mode(TOF_DISTANCE_MODE_LONG);
+    if (s) return s;
+    s = tof_set_timing_budget_ms(100);
+    if (s) return s;
+    s = tof_set_inter_measurement_ms(100);
+
+    return s;
 }
