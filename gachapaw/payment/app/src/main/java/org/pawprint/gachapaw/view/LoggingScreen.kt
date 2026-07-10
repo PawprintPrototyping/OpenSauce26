@@ -1,6 +1,5 @@
 package org.pawprint.gachapaw.view
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
@@ -30,21 +29,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import org.pawprint.gachapaw.model.LogSeverity
-import org.pawprint.gachapaw.ui.theme.GashapawTheme
 import org.pawprint.gachapaw.viewModel.LoggingViewModel
 
 @Composable
@@ -54,24 +53,35 @@ fun LoggingScreen(modifier: Modifier) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
-    // Auto-scroll logic: only auto-scroll if the last item is visible or if the list is empty
+    // Auto-scroll logic: stays locked to bottom unless the user manually scrolls up
+    var autoScrollEnabled by remember { mutableStateOf(true) }
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             val visibleItems = layoutInfo.visibleItemsInfo
-            if (visibleItems.isEmpty()) {
-                true
-            } else {
-                val lastVisibleItem = visibleItems.last()
-                // Check if the last item is fully visible or nearly visible
-                lastVisibleItem.index == layoutInfo.totalItemsCount - 1
-            }
+            if (visibleItems.isEmpty()) return@derivedStateOf true
+            val lastVisibleItem = visibleItems.last()
+
+            // Precise check: is the last item at the bottom of the scrollable area?
+            lastVisibleItem.index == layoutInfo.totalItemsCount - 1 &&
+                (lastVisibleItem.offset + lastVisibleItem.size) <= (layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding + 2)
         }
     }
 
-    LaunchedEffect(loggingState.size) {
-        if (isAtBottom && loggingState.isNotEmpty()) {
-            // Snap to bottom immediately to avoid animation race conditions with high frequency logs
+    // Re-enable auto-scroll when reaching the bottom (manually or via FAB)
+    LaunchedEffect(isAtBottom) {
+        if (isAtBottom) autoScrollEnabled = true
+    }
+
+    // Disable auto-scroll if the user manually scrolls away from the bottom
+    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
+        if (listState.isScrollInProgress && !isAtBottom) {
+            autoScrollEnabled = false
+        }
+    }
+
+    LaunchedEffect(loggingState.size, listState.isScrollInProgress) {
+        if (autoScrollEnabled && loggingState.isNotEmpty() && !listState.isScrollInProgress) {
             listState.scrollToItem(loggingState.size - 1)
         }
     }
@@ -167,9 +177,9 @@ fun LoggingScreen(modifier: Modifier) {
 
             // Status Footer
             Text(
-                text = "Log Stream: ${if (isAtBottom) "Active (Auto-scroll)" else "Paused"}",
+                text = "Log Stream: ${if (autoScrollEnabled) "Active (Auto-scroll)" else "Paused"}",
                 style = MaterialTheme.typography.labelMedium,
-                color = if (isAtBottom) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                color = if (autoScrollEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
                 modifier = Modifier
                     .align(Alignment.End)
                     .padding(top = 16.dp)
@@ -207,13 +217,5 @@ fun TerminalLogEntry(timeStamp: String, message: String, severity: LogSeverity) 
             fontSize = 12.sp,
             lineHeight = 16.sp
         )
-    }
-}
-
-@Preview(showBackground = true, widthDp = 400, heightDp = 600)
-@Composable
-fun LoggingScreenPreview() {
-    GashapawTheme {
-        LoggingScreen(modifier = Modifier.padding(16.dp))
     }
 }
