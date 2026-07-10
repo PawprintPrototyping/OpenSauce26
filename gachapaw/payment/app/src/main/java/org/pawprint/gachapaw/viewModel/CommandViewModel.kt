@@ -7,15 +7,20 @@ import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.result.ActivityResult
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import org.pawprint.gachapaw.model.LogSeverity
+import org.pawprint.gachapaw.model.ServiceState
 import org.pawprint.gachapaw.model.TransactionState
 import org.pawprint.gachapaw.service.GpioRepository
 import org.pawprint.gachapaw.service.GpioService
@@ -23,7 +28,6 @@ import org.pawprint.gachapaw.service.GpioServiceState
 import org.pawprint.gachapaw.service.LoggingRepository
 import org.pawprint.gachapaw.service.SquarePaymentRepository
 import kotlin.math.roundToInt
-import kotlin.time.Duration.Companion.milliseconds
 
 class CommandViewModel(
     private val gpioRepository: GpioRepository,
@@ -38,12 +42,28 @@ class CommandViewModel(
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val state: Flow<TransactionState> = gpioRepository.service.flatMapLatest { service ->
-        if (service is GpioServiceState.Disconnected) {
-            flowOf(TransactionState.DISCONNECTED)
-        } else {
-            (service as GpioServiceState.Connected).service.state
+    private val _uiState: StateFlow<ServiceState> = gpioRepository.service
+        .flatMapLatest { serviceState ->
+            when (serviceState) {
+                is GpioServiceState.Connected -> serviceState.service.state
+                is GpioServiceState.Disconnected -> flowOf(TransactionState.DISCONNECTED)
+            }
         }
+        .map { txState ->
+            // For now, we're only mapping the transaction state.
+            // You can later combine this with other flows for a full ServiceState.
+            ServiceState(transactionState = txState)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = ServiceState(TransactionState.DISCONNECTED)
+        )
+
+    val uiState: StateFlow<ServiceState> = _uiState
+
+    val isConnected: Flow<Boolean> = gpioRepository.service.map { serviceState ->
+        serviceState is GpioServiceState.Connected
     }
 
     private val _activityLaunchEvents: MutableSharedFlow<Intent> = MutableSharedFlow()
@@ -70,7 +90,7 @@ class CommandViewModel(
         }
     }
 
-    suspend fun launchSquareReaderActivity(launcher: ManagedActivityResultLauncher<Intent, ActivityResult>, cost: CharSequence) {
+    fun launchSquareReaderActivity(launcher: ManagedActivityResultLauncher<Intent, ActivityResult>, cost: CharSequence) {
         val costFloat = cost.toString().toFloatOrNull() ?: 0f
         if (costFloat !in 1.0f..25.0f) {
             Log.d("CommandViewModel", "triggerEnableCardReader unexpected cost: $cost")
@@ -92,12 +112,6 @@ class CommandViewModel(
             returnTimeout = RETURN_TIMEOUT
         )
         launcher.launch(intent)
-        delay((RETURN_TIMEOUT + 1000).milliseconds)
-        if (uiState.value.isSquareReaderActive) {
-            Log.d("CommandViewModel", "Square Reader timed out, forcing return to main activity")
-            loggingRepository.addLog("Command: Square Reader timed out", LogSeverity.ERROR)
-            resetPaymentFlow()
-        }
     }
 
     fun enterProdMode() {

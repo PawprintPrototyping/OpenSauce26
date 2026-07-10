@@ -11,6 +11,8 @@ import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -68,11 +70,11 @@ class GpioService : LifecycleService() {
         }
 
         private val adverts = listOf(
-            "Take a FUN memory game home TODAY!",
-            "Stave off the existential dread\nBuy a PAW PCB",
-            "Roses are red, violets are blue,\nThese PAWs will always be here for you",
-            "It's raining PAWs, my dream...",
-            "8008135",
+            "Take a FUN memory game home TODAY!\nOnly $15",
+            "Stave off the existential dread\nBuy a PAW PCB!Only $15",
+            "Roses are red, violets are smaller.\nPAW PCBs, Only $15!",
+            "It's raining PAWs, my dream...\nPAW PCBs Only $15",
+            "8008135\nPAW PCBs Only $15",
         )
     }
 
@@ -140,19 +142,28 @@ class GpioService : LifecycleService() {
                 }
             }
             addState(States.Advertise) {
+                var advertiseJob: Job? = null
                 onEntry {
                     _state.update { TransactionState.WAITING_FOR_BUTTON_PRESS }
                     loggingRepository.addLog("SM: State -> Advertise", LogSeverity.DEBUG)
-                    coroutineScope {
-                        launch { advertise() }
+                    advertiseJob = lifecycleScope.launch {
+                        advertise()
+                    }
+                    lifecycleScope.launch {
                         val result = withContext(Dispatchers.IO) {
                             gpioManager.waitForGpioState(expectedState = true)
                         }
                         if (result == 0) {
-                            loggingRepository.addLog("Hardware: Button pressed!", LogSeverity.INFO)
+                            loggingRepository.addLog(
+                                "Hardware: Button pressed!",
+                                LogSeverity.INFO
+                            )
                             machine.processEvent(ButtonPressed)
                         }
                     }
+                }
+                onExit {
+                    advertiseJob?.cancel("Button pressed")
                 }
                 transition<ButtonPressed> {
                     targetState = States.PaymentRequest
@@ -163,8 +174,8 @@ class GpioService : LifecycleService() {
                     _state.update { TransactionState.WAITING_FOR_TRANSACTION_RESULT }
                     setNeopixelColor(Color.Green)
                     loggingRepository.addLog("SM: State -> PaymentRequest", LogSeverity.DEBUG)
-                    displayOnLcd("TOTAL: $15, Tap or Insert to Pay Om nom nom\n" +
-                            "Or press the BUTTON to cancel")
+                    displayOnLcd("TOTAL: $15, Tap or Insert to Pay\n" +
+                            "or press the BUTTON to cancel")
                 }
                 transition<ButtonPressed> {
                     targetState = States.Advertise
@@ -224,7 +235,6 @@ class GpioService : LifecycleService() {
                 }
             }
         }
-        stateMachine.start()
     }
 
     fun setGpioState(pin: Int, state: Boolean, skipLog: Boolean = false) {
