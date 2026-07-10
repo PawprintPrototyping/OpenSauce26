@@ -7,6 +7,7 @@ enum class InputGpioState {
 }
 
 enum class TransactionState {
+    DISCONNECTED,
     INITIALIZING,
     WAITING_FOR_BUTTON_PRESS,
     WAITING_FOR_TRANSACTION_RESULT,
