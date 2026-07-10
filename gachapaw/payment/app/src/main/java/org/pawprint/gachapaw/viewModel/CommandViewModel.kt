@@ -1,7 +1,6 @@
 package org.pawprint.gachapaw.viewModel
 
 import android.app.Activity
-import android.app.Service
 import android.content.Intent
 import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
@@ -9,6 +8,7 @@ import androidx.activity.result.ActivityResult
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import org.pawprint.gachapaw.model.LogSeverity
 import org.pawprint.gachapaw.model.ServiceState
 import org.pawprint.gachapaw.model.TransactionState
@@ -28,6 +29,7 @@ import org.pawprint.gachapaw.service.GpioServiceState
 import org.pawprint.gachapaw.service.LoggingRepository
 import org.pawprint.gachapaw.service.SquarePaymentRepository
 import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.milliseconds
 
 class CommandViewModel(
     private val gpioRepository: GpioRepository,
