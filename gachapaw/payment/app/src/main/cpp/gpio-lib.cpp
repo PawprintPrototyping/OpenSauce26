@@ -3,6 +3,9 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <string>
+#include <sstream>
+#include <vector>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <poll.h>
@@ -15,6 +18,8 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+
+static const bool IS_VERBOSE = false;
 
 static int g_cancel_fd = -1;
 
@@ -80,7 +85,7 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_org_pawprint_gachapaw_service_GpioManager_setNeopixelColor(JNIEnv *env, jobject thiz,
                                                         jint argbColor) {
-    LOGD("enter setNeopixelColor");
+    if(IS_VERBOSE) LOGD("enter setNeopixelColor");
     uint8_t a = (argbColor >> 24) & 0xFF;
     uint8_t r = (argbColor >> 16) & 0xFF;
     uint8_t g = (argbColor >> 8) & 0xFF;
@@ -91,7 +96,7 @@ Java_org_pawprint_gachapaw_service_GpioManager_setNeopixelColor(JNIEnv *env, job
     auto finalG = static_cast<uint8_t>(static_cast<float>(g) * brightness);
     auto finalR = static_cast<uint8_t>(static_cast<float>(r) * brightness);
     auto finalB = static_cast<uint8_t>(static_cast<float>(b) * brightness);
-    LOGD("RGB Sequence: [R %d, G %d, B %d]", finalR, finalG, finalB);
+    if(IS_VERBOSE) LOGD("RGB Sequence: [R %d, G %d, B %d]", finalR, finalG, finalB);
 
     // NeoPixel expects GRB
     uint8_t colorData[3] = { finalG, finalR, finalB };
@@ -200,22 +205,65 @@ Java_org_pawprint_gachapaw_service_GpioManager_cancelWaitForGpio(JNIEnv *env, jo
     }
 }
 
+void printWrappedText(LiquidCrystal_I2C &lcd, const std::string &text) {
+    std::stringstream ss(text);
+    std::string segment;
+    int currentRow = 0;
+
+    // Split the input string by explicit newline characters first
+    while (std::getline(ss, segment, '\n') && currentRow < 4) {
+        std::stringstream lineStream(segment);
+        std::string word;
+        std::string currentLine = "";
+
+        // Wrap words within the current segment
+        while (lineStream >> word) {
+            int spaceNeeded = currentLine.empty() ? 0 : 1;
+
+            if (currentLine.length() + spaceNeeded + word.length() > 20) {
+                // Current line is full, print it and drop to the next row
+                if (currentRow < 4) {
+                    lcd.setCursor(0, currentRow);
+                    lcd.print(currentLine.c_str());
+                    currentRow++;
+                    currentLine = word; // Start new line with the word
+                } else {
+                    break;
+                }
+            } else {
+                if (!currentLine.empty()) {
+                    currentLine += " ";
+                }
+                currentLine += word;
+            }
+        }
+
+        // Print the leftover text for the current segment before moving to the next \n line
+        if (!currentLine.empty() && currentRow < 4) {
+            lcd.setCursor(0, currentRow);
+            lcd.print(currentLine.c_str());
+            currentRow++; // The \n forces the next segment to start on a new row
+        } else if (currentLine.empty() && currentRow < 4) {
+            // Handles empty lines (e.g., "\n\n") by just skipping a row
+            currentRow++;
+        }
+    }
+}
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_org_pawprint_gachapaw_service_GpioManager_updateLcdText(JNIEnv *env, jobject thiz,
-                                                       jstring text) {
+                                                             jstring text) {
     const char *nativeString = env->GetStringUTFChars(text, nullptr);
     LOGD("enter updateLcdText: %s", nativeString);
 
-    // HW-61 / PCF8574 Standard Pin Mapping:
-    // P0 -> RS, P1 -> RW, P2 -> EN, P3 -> Backlight, P4-P7 -> D4-D7
-    // Constructor order: dev, addr, En, Rw, Rs, d4, d5, d6, d7, backlighPin, pol
     LiquidCrystal_I2C lcd("/dev/i2c-1", 0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
 
     lcd.begin(20, 4);
-    lcd.backlight();
-    lcd.clear();
-    lcd.print(nativeString);
+    lcd.clear(); // Clear old content before writing new formatted text
+
+    // Call the wrapping helper
+    printWrappedText(lcd, std::string(nativeString));
 
     env->ReleaseStringUTFChars(text, nativeString);
     LOGI("LCD update complete using LiquidCrystal_I2C library with HW-61 pinout");

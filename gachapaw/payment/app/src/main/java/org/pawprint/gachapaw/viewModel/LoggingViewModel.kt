@@ -1,29 +1,21 @@
 package org.pawprint.gachapaw.viewModel
 
-import androidx.lifecycle.ViewModel
-import org.pawprint.gachapaw.model.LogLine
-import java.time.Instant
-import kotlinx.coroutines.flow.MutableStateFlow
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlin.collections.emptyList
+import org.pawprint.gachapaw.PawApplication
+import org.pawprint.gachapaw.model.LogLine
+import org.pawprint.gachapaw.model.LogSeverity
 
-class LoggingViewModel : ViewModel() {
-    companion object {
-        const val LOGGING_SIZE_LIMIT = 50
+class LoggingViewModel(application: Application) : AndroidViewModel(application) {
+    private val loggingRepository = (application as PawApplication).loggingRepository
+    val logState: StateFlow<List<LogLine>> = loggingRepository.logs
+
+    fun addLog(message: String, severity: LogSeverity = LogSeverity.INFO) {
+        loggingRepository.addLog(message, severity)
     }
-    private val _logState = MutableStateFlow<List<LogLine>>(emptyList())
-    val logState: StateFlow<List<LogLine>> = _logState.asStateFlow()
 
-    fun addLog(logLine: String) {
-        val line = LogLine(
-            Instant.now().toString(),
-            logLine
-        )
-        _logState.update { lines ->
-            val newList = lines + line
-            newList.takeLast(LOGGING_SIZE_LIMIT)
-        }
+    fun clearLogs() {
+        loggingRepository.clearLogs()
     }
 }

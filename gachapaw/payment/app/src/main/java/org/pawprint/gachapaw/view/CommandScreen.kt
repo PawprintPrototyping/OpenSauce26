@@ -34,6 +34,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,16 +57,21 @@ import org.pawprint.gachapaw.service.GpioRepository
 @Composable
 fun CommandScreen(modifier: Modifier, gpioRepository: GpioRepository) {
     val context = LocalContext.current
-    val squarePaymentRepository = (context.applicationContext as org.pawprint.gachapaw.PawApplication).squarePaymentRepository
+    val pawApp = context.applicationContext as org.pawprint.gachapaw.PawApplication
+    val squarePaymentRepository = pawApp.squarePaymentRepository
+    val loggingRepository = pawApp.loggingRepository
     val commandViewModel: CommandViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
-                CommandViewModel(gpioRepository, squarePaymentRepository)
+                CommandViewModel(gpioRepository, squarePaymentRepository, loggingRepository)
             }
         }
     )
     val isConnected by commandViewModel.isConnected.collectAsStateWithLifecycle(false)
     val commandUiState by commandViewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        commandViewModel.activityLaunchEvents.collect { context.startActivity(it) }
+    }
     OutlinedCard(
         modifier = modifier.fillMaxSize(),
         colors = CardDefaults.outlinedCardColors(
@@ -95,6 +101,14 @@ fun CommandScreen(modifier: Modifier, gpioRepository: GpioRepository) {
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                if (isConnected) {
+                    Text(
+                        "(Connected)",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
@@ -106,21 +120,29 @@ fun CommandScreen(modifier: Modifier, gpioRepository: GpioRepository) {
                     ProdScreen(modifier.weight(1f), commandViewModel)
                 }
             } else {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Icon(
                         Icons.Default.Error,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(48.dp)
                     )
                     Text(
                         text = "Service not Connected!",
-                        style = MaterialTheme.typography.headlineMedium,
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                    Text(
+                        text = "The background GPIO service is still initializing...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
                     )
                 }
             }
@@ -176,7 +198,7 @@ fun DebugScreen(
             isActive = serviceState.isPrizeDispenserActive,
         ) {
             FilledTonalButton(
-                onClick = { commandViewModel.enablePrizeDispenser() },
+                onClick = { commandViewModel.unlockPrizeDispenser() },
                 enabled = !serviceState.isPrizeDispenserActive,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 shape = MaterialTheme.shapes.medium
@@ -184,7 +206,7 @@ fun DebugScreen(
                 Text("Release")
             }
             FilledTonalButton(
-                onClick = { commandViewModel.disablePrizeDispenser() },
+                onClick = { commandViewModel.lockPrizeDispenser() },
                 enabled = !serviceState.isPrizeDispenserActive,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 shape = MaterialTheme.shapes.medium
@@ -239,10 +261,10 @@ fun DebugScreen(
             )
             FilledTonalButton(
                 onClick = {
-                    commandViewModel.launchSquareReaderActivity(
-                        requestPaymentLauncher,
-                        textFieldState.text
-                    )
+                        commandViewModel.launchSquareReaderActivity(
+                            requestPaymentLauncher,
+                            textFieldState.text
+                        )
                 },
                 enabled = !serviceState.isSquareReaderActive,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
