@@ -14,7 +14,7 @@
 #endif
 
 // Hardware Pin Configuration
-constexpr uint8_t PIN_PAY      = PC0; // Input from RPi -  successful payment when toggled high
+constexpr uint8_t PIN_PAY_L      = PC0; // Input from RPi -  successful payment when driven LOW
 constexpr uint8_t PIN_SDA      = PC1; 
 constexpr uint8_t PIN_SCL      = PC2; 
 constexpr uint8_t PIN_XSHUT    = PC3; 
@@ -53,7 +53,7 @@ void setup() {
     DEBUG_BEGIN(115200);
     DEBUG_PRINTLN("SYS: Booting...");
 
-    pinMode(PIN_PAY, INPUT);
+    pinMode(PIN_PAY_L, INPUT_PULLUP);
     pinMode(PIN_TRIGGER, INPUT_PULLUP);
     pinMode(PIN_MANUAL, INPUT_PULLUP);
     
@@ -146,7 +146,7 @@ void loop() {
         }
 
         case SystemState::WAIT_FOR_TRIGGER: {
-            if (digitalRead(PIN_TRIGGER) == LOW || digitalRead(PIN_PAY) == HIGH) {
+            if (digitalRead(PIN_TRIGGER) == LOW || digitalRead(PIN_PAY_L) == LOW) {
                 if (lastTriggerTime == 0) { 
                     lastTriggerTime = millis();
                 } else if ((millis() - lastTriggerTime) > DEBOUNCE_DELAY_MS) {
