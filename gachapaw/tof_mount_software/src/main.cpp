@@ -14,21 +14,22 @@
 #endif
 
 // Hardware Pin Configuration
-constexpr uint8_t PIN_PAY_L      = PC0; // Input from RPi -  successful payment when driven LOW
-constexpr uint8_t PIN_SDA      = PC1; 
-constexpr uint8_t PIN_SCL      = PC2; 
-constexpr uint8_t PIN_XSHUT    = PC3; 
-constexpr uint8_t PIN_LED_L    = PC4; // Active Low LED
-constexpr uint8_t PIN_TRIGGER  = PC5; // BT1 - Simulates PIN_PAY trigger
-constexpr uint8_t PIN_MANUAL   = PC6; // BT2 - Manual Override Button for solenoid
-constexpr uint8_t PIN_SOLENOID = PC7; // solenoid output
+constexpr uint8_t PIN_PAY_L      = PC0; // Input from RPi - successful payment when driven LOW
+constexpr uint8_t PIN_SDA        = PC1; 
+constexpr uint8_t PIN_SCL        = PC2; 
+constexpr uint8_t PIN_XSHUT      = PC3; 
+constexpr uint8_t PIN_LED_L      = PC4; // Active Low LED
+constexpr uint8_t PIN_TRIGGER    = PC5; // BT1 - Simulates PIN_PAY trigger
+constexpr uint8_t PIN_MANUAL     = PC6; // BT2 - Manual Override Button for solenoid
+constexpr uint8_t PIN_SOLENOID   = PC7; // solenoid output
 
 // System Constants
-constexpr uint16_t I2C_SPEED_KHZ          = 400000;
-constexpr uint16_t DETECTION_THRESHOLD_MM = 30; 
-constexpr uint32_t DEBOUNCE_DELAY_MS      = 30;
-constexpr uint8_t  CALIBRATION_SAMPLES    = 10;
-constexpr uint16_t TOF_TIMING_BUDGET_US   = 20000; 
+constexpr uint16_t I2C_SPEED_KHZ           = 400000;
+constexpr uint16_t DETECTION_THRESHOLD_MM  = 30; 
+constexpr uint32_t DEBOUNCE_DELAY_MS       = 30;
+constexpr uint32_t POST_DETECTION_DELAY_MS = 3000;
+constexpr uint8_t  CALIBRATION_SAMPLES     = 10;
+constexpr uint16_t TOF_TIMING_BUDGET_US    = 20000; 
 
 VL53L1X sensor;
 
@@ -37,15 +38,16 @@ enum class SystemState {
     CALIBRATING,
     WAIT_FOR_TRIGGER,
     WAIT_FOR_BALL,
+    POST_DETECTION_DELAY,
     ERROR
 };
 
 SystemState currentState = SystemState::INIT;
 uint16_t baselineDistanceMm = 0;
 
-// Timing and State Tracking
 uint32_t lastTriggerTime = 0;
 uint32_t lastManualDebounceTime = 0;
+uint32_t ballDetectedTime = 0;
 bool lastManualBtnState = HIGH;
 bool manualBtnHandled = false;
 
@@ -169,15 +171,25 @@ void loop() {
                 uint16_t currentDistance = sensor.ranging_data.range_mm;
                 
                 if (currentDistance < (baselineDistanceMm - DETECTION_THRESHOLD_MM)) {
-                    digitalWrite(PIN_LED_L, HIGH); // LED OFF
-                    digitalWrite(PIN_SOLENOID, LOW); 
-                    
                     DEBUG_PRINT("EVT: Ball Detected! Dist: ");
                     DEBUG_PRINT(currentDistance);
-                    DEBUG_PRINTLN(" mm");
+                    DEBUG_PRINTLN(" mm. Starting delay.");
                     
-                    currentState = SystemState::WAIT_FOR_TRIGGER;
+                    ballDetectedTime = millis(); // Record detection time
+                    currentState = SystemState::POST_DETECTION_DELAY;
                 }
+            }
+            break;
+        }
+
+        case SystemState::POST_DETECTION_DELAY: {
+            // Wait for the configured delay before turning off the solenoid
+            if ((millis() - ballDetectedTime) >= POST_DETECTION_DELAY_MS) {
+                digitalWrite(PIN_LED_L, HIGH); // LED OFF
+                digitalWrite(PIN_SOLENOID, LOW); 
+                
+                DEBUG_PRINTLN("EVT: Post-detection delay complete.");
+                currentState = SystemState::WAIT_FOR_TRIGGER;
             }
             break;
         }
