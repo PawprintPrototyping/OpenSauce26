@@ -10,10 +10,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import com.squareup.sdk.pos.ChargeRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,9 +41,7 @@ import ru.nsk.kstatemachine.statemachine.onTransitionTriggered
 import ru.nsk.kstatemachine.statemachine.processEventByLaunch
 import ru.nsk.kstatemachine.transition.noTransition
 import ru.nsk.kstatemachine.transition.targetState
-import kotlin.random.Random
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
+import kotlin.math.round
 import kotlin.time.Duration.Companion.seconds
 
 class GpioService : LifecycleService() {
@@ -54,9 +52,14 @@ class GpioService : LifecycleService() {
         private const val CHANNEL_ID = "gpio_service_channel"
 
         object ButtonPressed: Event
+        object Reinitialize: Event
         sealed class PaymentFinished : Event {
-            object Success: PaymentFinished()
-            data class Failed(val failureReason: String) : PaymentFinished()
+            data class Success(val tID: String): PaymentFinished()
+            object Cancelled: PaymentFinished()
+            data class Failed(
+                val code: ChargeRequest.ErrorCode,
+                val desc: String
+            ) : PaymentFinished()
         }
         object EnterMaintenance: Event
         object ExitMaintenance: Event
@@ -70,17 +73,19 @@ class GpioService : LifecycleService() {
         }
 
         private val adverts = listOf(
-            "Take a FUN memory game home TODAY!\nOnly $15",
-            "Stave off the existential dread\nBuy a PAW PCB!Only $15",
-            "Roses are red, violets are smaller.\nPAW PCBs, Only $15!",
-            "It's raining PAWs, my dream...\nPAW PCBs Only $15",
-            "8008135\nPAW PCBs Only $15",
+            "Take a FUN memory game home TODAY!\nOnly $%s",
+            "Stave off the existential dread\nBuy a PAW PCB!Only $%s",
+            "Roses are red, violets are smaller.\nPAW PCBs, Only $%s!",
+            "It's raining PAWs, my dream...\nPAW PCBs Only $%s",
+            "8008135\nPAW PCBs Only $%s",
         )
     }
 
     private val _state: MutableStateFlow<TransactionState> =
         MutableStateFlow(TransactionState.INITIALIZING)
     val state = _state.asStateFlow()
+    private val _pawCost: MutableStateFlow<Float> = MutableStateFlow(15.0f)
+    val pawCost = _pawCost.asStateFlow()
     private val gpioManager = GpioManager()
     private val gpioRepository by lazy { (applicationContext as PawApplication).gpioRepository }
     private val loggingRepository by lazy { (applicationContext as PawApplication).loggingRepository }
@@ -130,6 +135,9 @@ class GpioService : LifecycleService() {
             transition<EnterMaintenance> {
                 targetState = States.Maintenance
             }
+            transition<Reinitialize> {
+                targetState = States.Initialize
+            }
             addInitialState(States.Initialize) {
                 onEntry {
                     resetHardwareState()
@@ -174,8 +182,20 @@ class GpioService : LifecycleService() {
                     _state.update { TransactionState.WAITING_FOR_TRANSACTION_RESULT }
                     setNeopixelColor(Color.Green)
                     loggingRepository.addLog("SM: State -> PaymentRequest", LogSeverity.DEBUG)
-                    displayOnLcd("TOTAL: $15, Tap or Insert to Pay\n" +
-                            "or press the BUTTON to cancel")
+                    displayOnLcd("TOTAL: $${round(pawCost.value)}, Wait for GREEN light on Square below and then Tap or Insert to Pay")
+                    // Allow the user to press the button to cancel
+                    lifecycleScope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            gpioManager.waitForGpioState(expectedState = true)
+                        }
+                        if (result == 0) {
+                            loggingRepository.addLog(
+                                "Hardware: Button pressed!",
+                                LogSeverity.INFO
+                            )
+                            machine.processEvent(ButtonPressed)
+                        }
+                    }
                 }
                 transition<ButtonPressed> {
                     targetState = States.Advertise
@@ -185,7 +205,8 @@ class GpioService : LifecycleService() {
                     direction = {
                         when(event) {
                             is PaymentFinished.Failed -> targetState(States.PaymentFailed)
-                            PaymentFinished.Success -> targetState(States.DispenseCookie)
+                            is PaymentFinished.Cancelled -> targetState(States.PaymentFailed)
+                            is PaymentFinished.Success -> targetState(States.DispenseCookie)
                         }
                     }
                 }
@@ -195,12 +216,28 @@ class GpioService : LifecycleService() {
                     _state.update { TransactionState.TRANSACTION_FAIL }
                     setNeopixelColor(Color.Yellow)
                     loggingRepository.addLog("SM: State -> PaymentFailed", LogSeverity.WARNING)
-                    val triggerEvent = it.event
-                    if (triggerEvent is PaymentFinished.Failed) {
-                        val reason = triggerEvent.failureReason
-                        loggingRepository.addLog("Payment: Failed with reason: $reason", LogSeverity.ERROR)
-                        displayOnLcd("Oops Error: $reason")
+                    when (val triggerEvent = it.event) {
+                        is PaymentFinished.Failed -> {
+                            loggingRepository.addLog(
+                                "Payment: Failed (${triggerEvent.code}), " +
+                                        "with reason: ${triggerEvent.desc}", LogSeverity.ERROR
+                            )
+                            displayOnLcd("Oops Error! (${triggerEvent.code}: ${triggerEvent.desc}")
+                        }
+
+                        is PaymentFinished.Cancelled -> {
+                            loggingRepository.addLog("Payment: Cancelled", LogSeverity.INFO)
+                            displayOnLcd("Payment Cancelled...")
+                        }
+
+                        else -> {
+                            displayOnLcd("Unexpected State! Notify someone!!")
+                        }
                     }
+                    delay(3.seconds)
+                }
+                autoTransition {
+                    targetState = States.Advertise
                 }
             }
             addState(States.DispenseCookie) {
@@ -209,9 +246,12 @@ class GpioService : LifecycleService() {
                     setNeopixelColor(Color.Blue)
                     loggingRepository.addLog("SM: State -> DispenseCookie", LogSeverity.INFO)
                     unlockPrizeDispenser()
-                    displayOnLcd("Turn handle CLOCKWISE to receive SNACK")
-                    delay(5.seconds)
+                    displayOnLcd("Turn handle CLOCKWISE to receive PAW")
+                    delay(1.seconds)
                     lockPrizeDispenser()
+                }
+                autoTransition {
+                    targetState = States.Advertise
                 }
                 // Do not disrupt this process by allowing entrance to maintenance
                 transitionConditionally<EnterMaintenance> {
@@ -237,6 +277,24 @@ class GpioService : LifecycleService() {
         }
     }
 
+    fun updatePawCost(newCost: Float) {
+        if (newCost !in 1.0f..25.0f) return
+        loggingRepository.addLog("GS: updatePawCost: $newCost", LogSeverity.INFO)
+        _pawCost.value = newCost
+    }
+
+    fun handlePaymentSuccess(tID: String) {
+        stateMachine.processEventByLaunch(PaymentFinished.Success(tID))
+    }
+
+    fun handlePaymentCancelled() {
+        stateMachine.processEventByLaunch(PaymentFinished.Cancelled)
+    }
+
+    fun handlePaymentFailed(code: ChargeRequest.ErrorCode, desc: String) {
+        stateMachine.processEventByLaunch(PaymentFinished.Failed(code, desc))
+    }
+
     fun setGpioState(pin: Int, state: Boolean, skipLog: Boolean = false) {
         gpioManager.setGpioState(pin, state)
         if (!skipLog) {
@@ -251,43 +309,36 @@ class GpioService : LifecycleService() {
         }
     }
 
-    suspend fun advertise() {
-        while (currentCoroutineContext().isActive) {
-            val advert = adverts.random()
-            displayOnLcd(advert)
-            showRainbowEffect(cycleDuration = 1.seconds, totalDuration = 5.seconds)
-        }
-        setNeopixelColor(Color.Black)
+    private fun formatCost(cost: Float): String {
+        return if (cost % 1 == 0f) cost.toInt().toString() else String.format("%.2f", cost)
     }
 
-    suspend fun showRainbowEffect(cycleDuration: Duration, totalDuration: Duration) {
-        val startTime = System.currentTimeMillis()
-        val totalMs = totalDuration.inWholeMilliseconds
-        val cycleMs = cycleDuration.inWholeMilliseconds
-
+    suspend fun advertise() {
+        setNeopixelColor(Color.White)
         while (currentCoroutineContext().isActive) {
-            val now = System.currentTimeMillis()
-            val elapsedTotal = now - startTime
-
-            // Exit the effect after the total duration has passed
-            if (elapsedTotal >= totalMs) break
-
-            // Use modulo to loop the rainbow progress (0.0 to 1.0) within the cycle duration
-            val elapsedCycle = elapsedTotal % cycleMs
-            val progress = elapsedCycle.toFloat() / cycleMs.toFloat()
-
-            val hue = progress * 360f
-            val color = Color.hsv(hue, 1f, 1f)
-            setNeopixelColor(color, skipLog = true)
-
-            // Update at roughly 30 FPS for smoothness
-            delay(33.milliseconds)
+            val advert = adverts.random()
+            val costStr = formatCost(_pawCost.value)
+            displayOnLcd(advert.format(costStr))
+            delay(5.seconds)
         }
+    }
+
+    suspend fun waitForButtonPress() {
+        gpioManager.waitForGpioState(expectedState = true)
+    }
+
+    fun cancelWaitForButtonPress() {
+        gpioManager.cancelWaitForGpio()
     }
 
     fun enterProdMode() {
         loggingRepository.addLog("Service: Exiting Maintenance (entering Prod)", LogSeverity.INFO)
         stateMachine.processEventByLaunch(ExitMaintenance)
+    }
+
+    fun reinitialize() {
+        loggingRepository.addLog("Request to reinitialize", LogSeverity.INFO)
+        stateMachine.processEventByLaunch(Reinitialize)
     }
 
     fun exitProdMode() {
@@ -305,12 +356,12 @@ class GpioService : LifecycleService() {
         loggingRepository.addLog("LCD: Displaying text: $text", LogSeverity.INFO)
     }
 
-    private fun unlockPrizeDispenser() {
+    fun unlockPrizeDispenser() {
         loggingRepository.addLog("Hardware: Unlocking prize dispenser", LogSeverity.INFO)
         setGpioState(5, false)
     }
 
-    private fun lockPrizeDispenser() {
+    fun lockPrizeDispenser() {
         loggingRepository.addLog("Hardware: Locking prize dispenser", LogSeverity.INFO)
         setGpioState(5, true)
     }
@@ -320,15 +371,6 @@ class GpioService : LifecycleService() {
         lockPrizeDispenser()
         setNeopixelColor(Color.Black)
         loggingRepository.addLog("Hardware: Resetting hardware state", LogSeverity.DEBUG)
-    }
-
-    private fun getRandomOpaqueColor(): Color {
-        return Color(
-            red = Random.nextInt(256),
-            green = Random.nextInt(256),
-            blue = Random.nextInt(256),
-            alpha = 255
-        )
     }
 
     private fun startForegroundService() {

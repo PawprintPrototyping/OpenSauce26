@@ -15,9 +15,11 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.pawprint.gachapaw.model.LogSeverity
@@ -43,6 +45,7 @@ class CommandViewModel(
         const val NOTE_PAWB_TRANSACTION = "Pawprint Proto PAW PCB"
     }
 
+    //TODO: Move this into GpioService to report the entire ServiceState instead of combining here.
     @OptIn(ExperimentalCoroutinesApi::class)
     private val _uiState: StateFlow<ServiceState> = gpioRepository.service
         .flatMapLatest { serviceState ->
@@ -52,9 +55,10 @@ class CommandViewModel(
             }
         }
         .map { txState ->
-            // For now, we're only mapping the transaction state.
-            // You can later combine this with other flows for a full ServiceState.
-            ServiceState(transactionState = txState)
+            ServiceState(
+                transactionState = txState,
+                isSquareReaderActive = txState == TransactionState.WAITING_FOR_TRANSACTION_RESULT
+            )
         }
         .stateIn(
             scope = viewModelScope,
@@ -68,8 +72,21 @@ class CommandViewModel(
         serviceState is GpioServiceState.Connected
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val pawPrice: StateFlow<Float> = gpioRepository.service.flatMapLatest { serviceState ->
+        when (serviceState) {
+            is GpioServiceState.Connected -> serviceState.service.pawCost
+            is GpioServiceState.Disconnected -> flowOf(15f)
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 15f
+    )
+
     private val _activityLaunchEvents: MutableSharedFlow<Intent> = MutableSharedFlow()
     val activityLaunchEvents: SharedFlow<Intent> = _activityLaunchEvents.asSharedFlow()
+
     fun handlePaymentResult(result: ActivityResult) {
         loggingRepository.addLog("CommandViewModel: Handling payment result", LogSeverity.DEBUG)
         when (result.resultCode) {
@@ -78,30 +95,44 @@ class CommandViewModel(
                 val success = squarePaymentRepository.parseChargeSuccess(data)
                 Log.i(LOG_TAG, "payment succeeded: ${success.clientTransactionId}")
                 loggingRepository.addLog("Payment: Success (TxID: ${success.clientTransactionId})", LogSeverity.INFO)
+                withConnectedService {
+                    it.handlePaymentSuccess(success.clientTransactionId)
+                }
             }
             Activity.RESULT_CANCELED -> {
                 Log.i(LOG_TAG, "payment cancelled")
                 loggingRepository.addLog("Payment: Cancelled by user", LogSeverity.WARNING)
+                withConnectedService {
+                    it.handlePaymentCancelled()
+                }
             }
             else -> {
                 val data = result.data ?: return
                 val failure = squarePaymentRepository.parseChargeError(data)
                 Log.i(LOG_TAG, "payment failed: ${failure.debugDescription}")
                 loggingRepository.addLog("Payment: Failed (${failure.debugDescription})", LogSeverity.ERROR)
+                withConnectedService {
+                    it.handlePaymentFailed(failure.code, failure.debugDescription)
+                }
             }
         }
     }
 
-    fun launchSquareReaderActivity(launcher: ManagedActivityResultLauncher<Intent, ActivityResult>, cost: CharSequence) {
-        val costFloat = cost.toString().toFloatOrNull() ?: 0f
+    fun updatePawCost(cost: String) {
+        val costFloat = cost.toFloatOrNull() ?: 0f
         if (costFloat !in 1.0f..25.0f) {
             Log.d("CommandViewModel", "triggerEnableCardReader unexpected cost: $cost")
             loggingRepository.addLog("Command: Invalid payment amount: $cost", LogSeverity.WARNING)
             return
         }
+        withConnectedService { it.updatePawCost(costFloat) }
+    }
+
+    fun launchSquareReaderActivity(launcher: ManagedActivityResultLauncher<Intent, ActivityResult>) {
+        val costFloat = pawPrice.value
         val costInt = (costFloat * 100).roundToInt()
         Log.d("CommandViewModel", "triggerEnableCardReader for $costInt cents")
-        loggingRepository.addLog("Command: Launching Square Reader for $cost", LogSeverity.INFO)
+        loggingRepository.addLog("Command: Launching Square Reader for $costFloat", LogSeverity.INFO)
 
         val note = when(_uiState.value.transactionState) {
             TransactionState.MAINTENANCE -> NOTE_DEVELOPMENT
@@ -117,10 +148,9 @@ class CommandViewModel(
 
         viewModelScope.launch {
             delay((RETURN_TIMEOUT + 1000).milliseconds)
-            if (_uiState.value.isSquareReaderActive) {
-                Log.d("CommandViewModel", "Square Reader timed out, forcing return to main activity")
-                resetPaymentFlow()
-            }
+            cancelPaymentFlow()
+            Log.i("CommandViewModel", "Square Reader timed out, forcing return to main activity")
+            loggingRepository.addLog("Payment: Timeout waiting for Square", LogSeverity.INFO)
         }
     }
 
@@ -141,14 +171,14 @@ class CommandViewModel(
     fun unlockPrizeDispenser() {
         loggingRepository.addLog("Command: Unlocking Prize Dispenser", LogSeverity.INFO)
         withConnectedService {
-            it.setGpioState(5, false)
+            it.unlockPrizeDispenser()
         }
     }
 
     fun lockPrizeDispenser() {
         loggingRepository.addLog("Command: Locking Prize Dispenser", LogSeverity.INFO)
         withConnectedService {
-            it.setGpioState(5, true)
+            it.lockPrizeDispenser()
         }
     }
 
@@ -161,17 +191,41 @@ class CommandViewModel(
 
     fun waitForButtonPress() {
         loggingRepository.addLog("Command: Setting GPIO Latch", LogSeverity.INFO)
+        viewModelScope.launch {
+            withConnectedServiceSuspend { it.waitForButtonPress() }
+        }
     }
 
     fun cancelWaitForButtonPress() {
         loggingRepository.addLog("Command: Cancelling GPIO Latch", LogSeverity.INFO)
+        withConnectedService { it.cancelWaitForButtonPress() }
     }
 
-    fun resetPaymentFlow() {
+    fun reinitialize() {
+        withConnectedService { it.reinitialize() }
+    }
+
+    suspend fun cancelPaymentFlow() {
         loggingRepository.addLog("Command: Resetting Payment Flow", LogSeverity.WARNING)
+        if (_uiState.value.isSquareReaderActive) {
+            // Move this activity back to front
+            val returnIntent = Intent().apply {
+                setClassName("org.pawprint.gachapaw", "org.pawprint.gachapaw.MainActivity")
+                flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            }
+            _activityLaunchEvents.emit(returnIntent)
+        }
+        withConnectedService { it.handlePaymentCancelled() }
     }
 
     private fun withConnectedService(block: (GpioService) -> Unit) {
         (gpioRepository.service.value as? GpioServiceState.Connected)?.service?.let(block)
+    }
+
+    private suspend fun withConnectedServiceSuspend(block: suspend (GpioService) -> Unit) {
+        gpioRepository.service
+            .mapNotNull { (it as? GpioServiceState.Connected)?.service }
+            .first() // Suspends here until the flow emits a Connected state
+            .let { block(it) }
     }
 }

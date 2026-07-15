@@ -15,6 +15,10 @@ class GpioManager {
         }
     }
 
+    init {
+        nativeInit()
+    }
+
     suspend fun waitForGpioState(expectedState: Boolean): Int = suspendCancellableCoroutine { continuation ->
         continuation.invokeOnCancellation { cause ->
             Log.i(TAG, "waitForGpioState cancelled, cause: $cause")
@@ -32,6 +36,7 @@ class GpioManager {
         updateLcdText(text)
     }
 
+    private external fun nativeInit()
     external fun waitForGpio(pin: Int, expectedState: Boolean): Int
     external fun setGpioState(pin: Int, state: Boolean)
     external fun setNeopixelColor(color: Int)

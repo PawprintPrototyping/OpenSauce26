@@ -1,6 +1,9 @@
 package org.pawprint.gachapaw.view
 
+import android.content.Intent
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -69,8 +72,18 @@ fun CommandScreen(modifier: Modifier, gpioRepository: GpioRepository) {
     )
     val isConnected by commandViewModel.isConnected.collectAsStateWithLifecycle(false)
     val commandUiState by commandViewModel.uiState.collectAsStateWithLifecycle()
+    val requestPaymentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+            result -> commandViewModel.handlePaymentResult(result)
+    }
     LaunchedEffect(Unit) {
         commandViewModel.activityLaunchEvents.collect { context.startActivity(it) }
+    }
+    LaunchedEffect(commandUiState) {
+        if (commandUiState.transactionState == TransactionState.WAITING_FOR_TRANSACTION_RESULT) {
+            commandViewModel.launchSquareReaderActivity(requestPaymentLauncher)
+        }
     }
     OutlinedCard(
         modifier = modifier.fillMaxSize(),
@@ -115,7 +128,7 @@ fun CommandScreen(modifier: Modifier, gpioRepository: GpioRepository) {
 
             if (isConnected) {
                 if (commandUiState.transactionState == TransactionState.MAINTENANCE) {
-                    DebugScreen(modifier.weight(1f), commandViewModel, commandUiState)
+                    DebugScreen(modifier.weight(1f), commandViewModel, requestPaymentLauncher, commandUiState)
                 } else {
                     ProdScreen(modifier.weight(1f), commandViewModel)
                 }
@@ -164,11 +177,11 @@ fun ProdScreen(
             Text(text = commandViewModel.uiState.collectAsState().value.transactionState.toString())
         }
         FilledTonalButton(
-            onClick = { commandViewModel.resetPaymentFlow() },
+            onClick = { commandViewModel.reinitialize() },
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             shape = MaterialTheme.shapes.medium
         ) {
-            Text("Reset Payment Flow")
+            Text("Reinitialize Payment Flow")
         }
         FilledTonalButton(
             onClick = { commandViewModel.enterDebugMode() },
@@ -184,6 +197,7 @@ fun ProdScreen(
 fun DebugScreen(
     modifier: Modifier = Modifier,
     commandViewModel: CommandViewModel,
+    requestPaymentLauncher: ManagedActivityResultLauncher<Intent, ActivityResult>,
     serviceState: ServiceState
 ) {
     // Control Sections
@@ -193,7 +207,7 @@ fun DebugScreen(
     ) {
         ControlRow(
             title = "Prize Dispenser",
-            subtitle = if (serviceState.isPrizeDispenserActive) "Active" else "Idle",
+            subtitle = if (serviceState.isPrizeDispenserActive) "Unlock" else "Lock",
             icon = Icons.Default.Build,
             isActive = serviceState.isPrizeDispenserActive,
         ) {
@@ -203,7 +217,7 @@ fun DebugScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 shape = MaterialTheme.shapes.medium
             ) {
-                Text("Release")
+                Text("Unlock")
             }
             FilledTonalButton(
                 onClick = { commandViewModel.lockPrizeDispenser() },
@@ -211,7 +225,7 @@ fun DebugScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 shape = MaterialTheme.shapes.medium
             ) {
-                Text("Engage")
+                Text("Lock")
             }
         }
 
@@ -230,20 +244,17 @@ fun DebugScreen(
             }
         }
 
-        val requestPaymentLauncher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.StartActivityForResult()
-        ) {
-                result -> commandViewModel.handlePaymentResult(result)
-        }
-
         ControlRow(
             title = "Square Reader",
             subtitle = if (serviceState.isSquareReaderActive) "Ready for Payment" else "Disabled",
             icon = Icons.Default.Payment,
             isActive = serviceState.isSquareReaderActive,
         ) {
-
-            val textFieldState = rememberTextFieldState(initialText = "1")
+            val pawPrice by commandViewModel.pawPrice.collectAsStateWithLifecycle()
+            val textFieldState = rememberTextFieldState(initialText = pawPrice.toString())
+            LaunchedEffect(textFieldState.text) {
+                commandViewModel.updatePawCost(textFieldState.text.toString())
+            }
             val currencyMask = InputTransformation.byValue { current, proposed ->
                 // Regex: optional digits, optional dot, up to 2 digits after dot
                 val regex = Regex("""^\d*\.?\d{0,2}$""")
@@ -261,10 +272,7 @@ fun DebugScreen(
             )
             FilledTonalButton(
                 onClick = {
-                        commandViewModel.launchSquareReaderActivity(
-                            requestPaymentLauncher,
-                            textFieldState.text
-                        )
+                        commandViewModel.launchSquareReaderActivity(requestPaymentLauncher)
                 },
                 enabled = !serviceState.isSquareReaderActive,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
